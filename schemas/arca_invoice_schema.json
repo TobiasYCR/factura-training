@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factura-training.local/schemas/arca_invoice_schema.json",
+  "title": "ARCA invoice extraction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tipo_comprobante",
+    "codigo_comprobante",
+    "punto_venta",
+    "numero_comprobante",
+    "numero_factura",
+    "fecha_emision",
+    "emisor",
+    "receptor",
+    "moneda",
+    "tipo_cambio",
+    "subtotal",
+    "importe_no_gravado",
+    "importe_exento",
+    "iva_total",
+    "tributos_total",
+    "impuestos",
+    "total",
+    "cae",
+    "fecha_vencimiento_cae",
+    "iva",
+    "tributos",
+    "items"
+  ],
+  "properties": {
+    "tipo_comprobante": { "type": ["string", "null"] },
+    "codigo_comprobante": { "type": ["integer", "null"] },
+    "punto_venta": {
+      "type": ["string", "null"],
+      "pattern": "^\\d{4,5}$"
+    },
+    "numero_comprobante": {
+      "type": ["string", "null"],
+      "pattern": "^\\d{8}$"
+    },
+    "numero_factura": {
+      "type": ["string", "null"],
+      "pattern": "^\\d{4,5}-\\d{8}$"
+    },
+    "fecha_emision": {
+      "type": ["string", "null"],
+      "format": "date"
+    },
+    "emisor": { "$ref": "#/$defs/persona" },
+    "receptor": { "$ref": "#/$defs/persona" },
+    "moneda": {
+      "type": ["string", "null"],
+      "minLength": 3,
+      "maxLength": 3
+    },
+    "tipo_cambio": { "type": ["number", "null"] },
+    "subtotal": { "type": ["number", "null"] },
+    "importe_no_gravado": { "type": ["number", "null"] },
+    "importe_exento": { "type": ["number", "null"] },
+    "iva_total": { "type": ["number", "null"] },
+    "tributos_total": { "type": ["number", "null"] },
+    "impuestos": { "type": ["number", "null"] },
+    "total": { "type": ["number", "null"] },
+    "cae": {
+      "type": ["string", "null"],
+      "pattern": "^\\d{14}$"
+    },
+    "fecha_vencimiento_cae": {
+      "type": ["string", "null"],
+      "format": "date"
+    },
+    "iva": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/iva_item" }
+    },
+    "tributos": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tributo_item" }
+    },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/factura_item" }
+    }
+  },
+  "$defs": {
+    "persona": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nombre", "doc_tipo", "doc_nro", "cuit", "condicion_iva"],
+      "properties": {
+        "nombre": { "type": ["string", "null"] },
+        "doc_tipo": { "type": ["integer", "null"] },
+        "doc_nro": { "type": ["string", "null"] },
+        "cuit": {
+          "type": ["string", "null"],
+          "pattern": "^\\d{2}-\\d{8}-\\d$"
+        },
+        "condicion_iva": { "type": ["string", "null"] }
+      }
+    },
+    "iva_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codigo", "descripcion", "base_imponible", "importe"],
+      "properties": {
+        "codigo": { "type": ["integer", "null"] },
+        "descripcion": { "type": ["string", "null"] },
+        "base_imponible": { "type": ["number", "null"] },
+        "importe": { "type": ["number", "null"] }
+      }
+    },
+    "tributo_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codigo", "descripcion", "base_imponible", "alicuota", "importe"],
+      "properties": {
+        "codigo": { "type": ["integer", "null"] },
+        "descripcion": { "type": ["string", "null"] },
+        "base_imponible": { "type": ["number", "null"] },
+        "alicuota": { "type": ["number", "null"] },
+        "importe": { "type": ["number", "null"] }
+      }
+    },
+    "factura_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["descripcion", "cantidad", "precio_unitario", "importe"],
+      "properties": {
+        "descripcion": { "type": ["string", "null"] },
+        "cantidad": { "type": ["number", "null"] },
+        "precio_unitario": { "type": ["number", "null"] },
+        "importe": { "type": ["number", "null"] }
+      }
+    }
+  }
+}

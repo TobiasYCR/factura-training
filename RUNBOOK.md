@@ -88,4 +88,4 @@ Para que la medición tenga sentido, conviene separar:
 
 ## Próximo paso recomendado
 
-Agregar 30-100 facturas reales anonimizadas de ARCA/OCR, manteniendo el mismo esquema JSON. Con solo 5 ejemplos el LoRA puede memorizar formato, pero todavía no demuestra generalización.
+Antes de crecer el dataset, usar `docs/arca-schema.md` y `schemas/arca_invoice_schema.json` como contrato del JSON final. Luego agregar 30-100 facturas reales anonimizadas de ARCA/OCR, manteniendo ese mismo esquema. Con pocos ejemplos el LoRA puede memorizar formato, pero todavía no demuestra generalización.
