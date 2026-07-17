@@ -1,0 +1,9 @@
+Factura A
+Comp. Nro: 0008-00009123
+Servicios del Sur SRL
+CUIT: 30-87654321-0
+Cliente: Transporte Norte SA
+Fecha de emision: 14/11/2026
+Subtotal: $88000
+IVA 21%: $18480
+Importe total: $106480
