@@ -97,7 +97,7 @@ def main():
     )
     parser.add_argument("--model", choices=["base", "lora", "both"], default="both")
     parser.add_argument("--eval-file", default="data/eval.jsonl")
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max-new-tokens", type=int, default=160)
     args = parser.parse_args()
 
     examples = list(read_jsonl(args.eval_file))

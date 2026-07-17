@@ -49,7 +49,7 @@ def main():
     )
     parser.add_argument("--ocr-file", default="data/test_ocr.txt")
     parser.add_argument("--ocr-text")
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max-new-tokens", type=int, default=160)
     args = parser.parse_args()
 
     if args.ocr_text:

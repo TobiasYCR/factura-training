@@ -4,6 +4,18 @@ from trl import SFTTrainer, SFTConfig
 import torch
 
 max_seq_length = 1024
+strict_instruction = (
+    "Converti este texto OCR de una factura en un unico objeto JSON valido. "
+    "No inventes datos. Si falta un dato, usa null. "
+    "No agregues texto antes o despues del JSON. "
+    "Usa exactamente estas claves: tipo_comprobante, numero_factura, "
+    "empresa_emisora, identificacion_emisora, cliente, fecha, subtotal, "
+    "impuestos, total, moneda. "
+    "No uses claves distintas como comp_nro, importe_total o total_factura. "
+    "La fecha debe estar en formato YYYY-MM-DD. "
+    "Los importes deben ser numeros sin simbolo de moneda. "
+    "La moneda debe ser ARS si la factura esta en pesos argentinos."
+)
 
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit",
@@ -32,8 +44,8 @@ dataset = load_dataset(
 )
 
 def format_example(example):
-    text = f"""### Instrucción:
-{example["instruction"]}
+    text = f"""### Instruccion:
+{strict_instruction}
 
 ### Texto OCR:
 {example["input"]}

@@ -10,8 +10,16 @@ BASE_MODEL = "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit"
 LORA_MODEL = "factura-qwen-lora"
 MAX_SEQ_LENGTH = 1024
 DEFAULT_INSTRUCTION = (
-    "Convertí este texto OCR de una factura en JSON válido. "
-    "No inventes datos. Si falta un dato, usá null."
+    "Converti este texto OCR de una factura en un unico objeto JSON valido. "
+    "No inventes datos. Si falta un dato, usa null. "
+    "No agregues texto antes o despues del JSON. "
+    "Usa exactamente estas claves: tipo_comprobante, numero_factura, "
+    "empresa_emisora, identificacion_emisora, cliente, fecha, subtotal, "
+    "impuestos, total, moneda. "
+    "No uses claves distintas como comp_nro, importe_total o total_factura. "
+    "La fecha debe estar en formato YYYY-MM-DD. "
+    "Los importes deben ser numeros sin simbolo de moneda. "
+    "La moneda debe ser ARS si la factura esta en pesos argentinos."
 )
 REQUIRED_KEYS = {
     "tipo_comprobante",
@@ -28,7 +36,7 @@ REQUIRED_KEYS = {
 
 
 def build_prompt(ocr_text, instruction=DEFAULT_INSTRUCTION):
-    return f"""### Instrucción:
+    return f"""### Instruccion:
 {instruction}
 
 ### Texto OCR:
@@ -108,6 +116,8 @@ def generate_with_loaded_model(model, tokenizer, ocr_text, max_new_tokens):
         **inputs,
         max_new_tokens=max_new_tokens,
         do_sample=False,
+        repetition_penalty=1.05,
+        eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.eos_token_id,
     )
     generated_ids = output_ids[0][inputs["input_ids"].shape[-1] :]
@@ -131,7 +141,7 @@ def main():
     )
     parser.add_argument("--ocr-file", default="data/test_ocr.txt")
     parser.add_argument("--ocr-text")
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max-new-tokens", type=int, default=160)
     args = parser.parse_args()
 
     model_name = BASE_MODEL if args.model == "base" else LORA_MODEL

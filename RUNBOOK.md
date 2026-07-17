@@ -67,6 +67,8 @@ python compare_base_lora.py --ocr-file data/test_ocr.txt
 
 Este script carga primero el modelo base, libera memoria CUDA y luego carga el LoRA. Es más amable con una RTX 4050 de 6 GB.
 
+Si el modelo genera campos fuera del esquema o JSON roto, no es un problema de CUDA: es senal de que el dataset todavia es demasiado chico. Reentrena con el `train.py` actualizado y agrega mas ejemplos reales anonimizados.
+
 ## Evaluar campo por campo
 
 ```bash
