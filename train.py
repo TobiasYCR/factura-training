@@ -12,6 +12,8 @@ strict_instruction = (
     "empresa_emisora, identificacion_emisora, cliente, fecha, subtotal, "
     "impuestos, total, moneda. "
     "No uses claves distintas como comp_nro, importe_total o total_factura. "
+    "Devuelve valores limpios: numero_factura sin etiquetas como Nro o Comp, "
+    "identificacion_emisora sin la palabra CUIT, y cliente sin el prefijo Cliente. "
     "La fecha debe estar en formato YYYY-MM-DD. "
     "Los importes deben ser numeros sin simbolo de moneda. "
     "La moneda debe ser ARS si la factura esta en pesos argentinos."

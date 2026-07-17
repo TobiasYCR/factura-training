@@ -17,6 +17,8 @@ DEFAULT_INSTRUCTION = (
     "empresa_emisora, identificacion_emisora, cliente, fecha, subtotal, "
     "impuestos, total, moneda. "
     "No uses claves distintas como comp_nro, importe_total o total_factura. "
+    "Devuelve valores limpios: numero_factura sin etiquetas como Nro o Comp, "
+    "identificacion_emisora sin la palabra CUIT, y cliente sin el prefijo Cliente. "
     "La fecha debe estar en formato YYYY-MM-DD. "
     "Los importes deben ser numeros sin simbolo de moneda. "
     "La moneda debe ser ARS si la factura esta en pesos argentinos."
@@ -89,6 +91,18 @@ def validate_invoice_json(parsed):
         value = parsed.get(key)
         if value is not None and not isinstance(value, (int, float)):
             errors.append(f"{key} debería ser número o null.")
+
+    numero = parsed.get("numero_factura")
+    if numero is not None and not re.fullmatch(r"\d{4}-\d{8}", str(numero)):
+        errors.append("numero_factura deberia tener formato 0000-00000000, sin etiquetas.")
+
+    cuit = parsed.get("identificacion_emisora")
+    if cuit is not None and not re.fullmatch(r"\d{2}-\d{8}-\d", str(cuit)):
+        errors.append("identificacion_emisora deberia tener formato CUIT limpio 00-00000000-0.")
+
+    cliente = parsed.get("cliente")
+    if isinstance(cliente, str) and re.match(r"^\s*cliente\s*:", cliente, flags=re.IGNORECASE):
+        errors.append("cliente no deberia incluir el prefijo 'Cliente:'.")
 
     return errors
 
