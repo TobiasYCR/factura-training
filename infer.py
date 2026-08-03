@@ -3,9 +3,6 @@ import json
 import re
 from pathlib import Path
 
-from unsloth import FastLanguageModel
-
-
 BASE_MODEL = "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit"
 LORA_MODEL = "factura-qwen-lora"
 MAX_SEQ_LENGTH = 2048
@@ -51,6 +48,7 @@ REQUIRED_KEYS = {
     "items",
 }
 PERSON_KEYS = {"nombre", "doc_tipo", "doc_nro", "cuit", "condicion_iva"}
+IVA_CODE_BY_RATE = {10.5: 4, 21.0: 5, 27.0: 6}
 
 
 def build_prompt(ocr_text, instruction=DEFAULT_INSTRUCTION):
@@ -67,6 +65,7 @@ def build_prompt(ocr_text, instruction=DEFAULT_INSTRUCTION):
 def extract_json(text):
     text = text.strip()
     decoder = json.JSONDecoder()
+    best_partial = (None, None, -1)
 
     for index, char in enumerate(text):
         if char != "{":
@@ -76,7 +75,15 @@ def extract_json(text):
         except json.JSONDecodeError:
             continue
         if isinstance(parsed, dict):
-            return parsed, text[index : index + end]
+            score = len(REQUIRED_KEYS & set(parsed))
+            json_text = text[index : index + end]
+            if REQUIRED_KEYS <= set(parsed):
+                return parsed, json_text
+            if score > best_partial[2]:
+                best_partial = (parsed, json_text, score)
+
+    if best_partial[0] is not None:
+        return best_partial[0], best_partial[1]
 
     match = re.search(r"\{.*\}", text, flags=re.DOTALL)
     if not match:
@@ -88,6 +95,116 @@ def extract_json(text):
         return None, match.group(0)
 
     return parsed, match.group(0)
+
+
+def digits(value):
+    if value is None:
+        return None
+    return re.sub(r"\D", "", str(value))
+
+
+def as_number(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def round_money(value):
+    return round(float(value) + 1e-9, 2)
+
+
+def rate_from_description(description):
+    if description is None:
+        return None
+    match = re.search(r"10[,.]5|21|27", str(description))
+    if not match:
+        return None
+    return float(match.group(0).replace(",", "."))
+
+
+def normalize_invoice_json(parsed):
+    if not isinstance(parsed, dict):
+        return parsed
+
+    normalized = dict(parsed)
+
+    for person_key in ("emisor", "receptor"):
+        person = normalized.get(person_key)
+        if not isinstance(person, dict):
+            continue
+        person = dict(person)
+        cuit_digits = digits(person.get("cuit"))
+        if cuit_digits and len(cuit_digits) == 11:
+            person["doc_nro"] = cuit_digits
+        normalized[person_key] = person
+
+    items = normalized.get("items")
+    if isinstance(items, list):
+        fixed_items = []
+        for item in items:
+            if not isinstance(item, dict):
+                fixed_items.append(item)
+                continue
+            item = dict(item)
+            quantity = as_number(item.get("cantidad"))
+            unit_price = as_number(item.get("precio_unitario"))
+            amount = as_number(item.get("importe"))
+            if quantity and amount is not None and unit_price is not None:
+                expected_unit = round_money(amount / quantity)
+                if abs(round_money(unit_price * quantity) - amount) > 0.02:
+                    item["precio_unitario"] = expected_unit
+            fixed_items.append(item)
+        normalized["items"] = fixed_items
+
+    iva_items = normalized.get("iva")
+    if isinstance(iva_items, list):
+        fixed_iva = []
+        for iva in iva_items:
+            if not isinstance(iva, dict):
+                fixed_iva.append(iva)
+                continue
+            iva = dict(iva)
+            rate = rate_from_description(iva.get("descripcion"))
+            base = as_number(iva.get("base_imponible"))
+            amount = as_number(iva.get("importe"))
+            if rate in IVA_CODE_BY_RATE:
+                iva["codigo"] = IVA_CODE_BY_RATE[rate]
+                if base is not None:
+                    expected_amount = round_money(base * rate / 100)
+                    if amount is None or abs(amount - expected_amount) > 0.05:
+                        iva["importe"] = expected_amount
+            fixed_iva.append(iva)
+        normalized["iva"] = fixed_iva
+        if all(isinstance(iva, dict) and as_number(iva.get("importe")) is not None for iva in fixed_iva):
+            normalized["iva_total"] = round_money(sum(iva["importe"] for iva in fixed_iva))
+
+    tributos = normalized.get("tributos")
+    if isinstance(tributos, list):
+        fixed_tributos = []
+        for tributo in tributos:
+            if not isinstance(tributo, dict):
+                fixed_tributos.append(tributo)
+                continue
+            tributo = dict(tributo)
+            description = str(tributo.get("descripcion") or "").lower()
+            if "municipal" in description or "percepcion" in description:
+                tributo["codigo"] = 99
+            base = as_number(tributo.get("base_imponible"))
+            rate = as_number(tributo.get("alicuota"))
+            amount = as_number(tributo.get("importe"))
+            if base is not None and rate is not None:
+                expected_amount = round_money(base * rate / 100)
+                if amount is None or abs(amount - expected_amount) > 0.05:
+                    tributo["importe"] = expected_amount
+            fixed_tributos.append(tributo)
+        normalized["tributos"] = fixed_tributos
+        if all(isinstance(tributo, dict) and as_number(tributo.get("importe")) is not None for tributo in fixed_tributos):
+            normalized["tributos_total"] = round_money(sum(tributo["importe"] for tributo in fixed_tributos))
+
+    iva_total = as_number(normalized.get("iva_total"))
+    tributos_total = as_number(normalized.get("tributos_total"))
+    if iva_total is not None and tributos_total is not None:
+        normalized["impuestos"] = round_money(iva_total + tributos_total)
+
+    return normalized
 
 
 def validate_invoice_json(parsed):
@@ -170,6 +287,8 @@ def load_ocr_text(args):
 
 
 def load_model(model_name):
+    from unsloth import FastLanguageModel
+
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_name,
         max_seq_length=MAX_SEQ_LENGTH,
@@ -218,6 +337,7 @@ def main():
     ocr_text = load_ocr_text(args)
     raw = run_inference(model_name, ocr_text, args.max_new_tokens)
     parsed, json_text = extract_json(raw)
+    parsed = normalize_invoice_json(parsed)
     errors = validate_invoice_json(parsed)
 
     print(f"Modelo: {args.model} ({model_name})")
