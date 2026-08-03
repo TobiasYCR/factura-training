@@ -40,12 +40,23 @@ python -c "import torch; import unsloth; print(torch.cuda.is_available()); print
 python train.py
 ```
 
+Por defecto, `train.py` usa:
+
+- `data/train.jsonl`
+- `data/synthetic_invoices/synthetic_train.jsonl`, si existe
+
+Para entrenar solo con un archivo:
+
+```bash
+python train.py --data-files data/train.jsonl --max-steps 80
+```
+
 Resultado esperado:
 
 - `outputs/checkpoint-20/`
 - `factura-qwen-lora/`
 
-El entrenamiento actual usa ejemplos ARCA en `data/train.jsonl`, `max_seq_length=2048` y `max_steps=80`, porque el JSON final es mas largo que la prueba inicial.
+El entrenamiento actual usa ejemplos ARCA manuales y puede sumar el dataset sintetico generado, con `max_seq_length=2048` y `max_steps=160` por defecto, porque el JSON final es mas largo que la prueba inicial.
 
 ## Probar una factura nueva con el LoRA
 
@@ -74,6 +85,19 @@ Si el modelo genera campos fuera del esquema o JSON roto, no es un problema de C
 ```bash
 python evaluate.py --model both --eval-file data/eval.jsonl
 ```
+
+## Generar facturas sinteticas
+
+```bash
+python scripts/generate_synthetic_invoices.py --count 100 --seed 42
+```
+
+Salida:
+
+- `data/synthetic_invoices/synthetic_train.jsonl`: dataset para entrenamiento.
+- `data/synthetic_invoices/manifest.jsonl`: indice de ejemplos generados.
+- `data/synthetic_invoices/pdfs/`: PDFs regenerables, ignorados por Git.
+- `data/synthetic_invoices/ocr/`: textos OCR regenerables, ignorados por Git.
 
 El archivo `data/eval.jsonl` debe contener ejemplos no usados en entrenamiento, con este formato:
 

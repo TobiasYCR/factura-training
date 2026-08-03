@@ -1,0 +1,4 @@
+data/synthetic_invoices/pdfs/
+data/synthetic_invoices/ocr/
+data/synthetic_invoices/*_preview-*.png
+__pycache__/
