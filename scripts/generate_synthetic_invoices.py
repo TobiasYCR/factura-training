@@ -23,7 +23,9 @@ except ModuleNotFoundError:
 
 INSTRUCTION = (
     "Converti este texto OCR de una factura ARCA en JSON valido usando el schema "
-    "indicado. No inventes datos; si falta un dato usa null o array vacio."
+    "indicado. No inventes datos; si falta un dato usa null o array vacio. "
+    "Codigos IVA: 10.5%=4, 21%=5, 27%=6. Para tributos/percepciones municipales usa codigo 99. "
+    "Extrae items solo si aparecen como lineas en el OCR y copia sus importes exactamente."
 )
 
 INVOICE_TYPES = [
@@ -234,17 +236,21 @@ def ocr_text(label: dict, rng: random.Random) -> str:
     if receptor["condicion_iva"]:
         lines.append(f"Condicion IVA: {receptor['condicion_iva']}")
     lines.extend(["Moneda: PES", "Tipo Cambio: 1"])
-    if rng.random() < 0.7:
-        for item in label["items"]:
-            lines.append(
-                f"{item['descripcion']} Cant {item['cantidad']} P.Unit {money_ar(item['precio_unitario'])} Importe {money_ar(item['importe'])}"
-            )
+    for item in label["items"]:
+        lines.append(
+            f"Item: {item['descripcion']} Cant {item['cantidad']} P.Unit {money_ar(item['precio_unitario'])} Importe {money_ar(item['importe'])}"
+        )
     lines.append(f"Subtotal: $ {money_ar(label['subtotal'])}")
     if label["iva_total"]:
         for iva in label["iva"]:
-            lines.append(f"IVA {iva['descripcion']}: $ {money_ar(iva['importe'])}")
+            lines.append(
+                f"IVA {iva['descripcion']} Codigo {iva['codigo']} Base $ {money_ar(iva['base_imponible'])} Importe $ {money_ar(iva['importe'])}"
+            )
     if label["tributos_total"]:
-        lines.append(f"Tributos: $ {money_ar(label['tributos_total'])}")
+        for tributo in label["tributos"]:
+            lines.append(
+                f"Tributo Codigo {tributo['codigo']} {tributo['descripcion']} Base $ {money_ar(tributo['base_imponible'])} Alic {money_ar(tributo['alicuota'])}% Importe $ {money_ar(tributo['importe'])}"
+            )
     lines.extend(
         [
             f"Importe Total: $ {money_ar(label['total'])}",

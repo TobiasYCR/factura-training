@@ -23,6 +23,9 @@ strict_instruction = (
     "Normaliza valores: fechas YYYY-MM-DD, CUIT con guiones en cuit, doc_nro sin guiones, "
     "punto_venta de 5 digitos, numero_comprobante de 8 digitos, numero_factura como 00000-00000000. "
     "Usa moneda ARCA: PES para pesos argentinos y DOL para dolares. "
+    "Codigos IVA: 10.5%=4, 21%=5, 27%=6. Para tributos/percepciones municipales usa codigo 99 si el OCR no informa otro codigo. "
+    "Solo extrae items cuando aparezcan lineas de items en el OCR; si no aparecen usa items: []. "
+    "Para cada item copia descripcion, cantidad, precio_unitario e importe exactamente; no recalcules ni inventes items. "
     "No incluyas etiquetas OCR como CUIT:, Cliente:, Comp. Nro: dentro de los valores."
 )
 
