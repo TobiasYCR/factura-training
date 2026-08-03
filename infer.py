@@ -364,13 +364,14 @@ def normalize_invoice_json(parsed):
 
 
 def finalize_invoice_json(parsed, ocr_text=None):
+    if ocr_text:
+        structured = parse_structured_arca_ocr(ocr_text)
+        if structured is not None:
+            return structured
+
     normalized = normalize_invoice_json(parsed)
     if isinstance(normalized, dict) and REQUIRED_KEYS <= set(normalized):
         return normalized
-    if ocr_text:
-        fallback = parse_structured_arca_ocr(ocr_text)
-        if fallback is not None:
-            return fallback
     return normalized
 
 
