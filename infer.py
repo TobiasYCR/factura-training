@@ -8,33 +8,46 @@ from unsloth import FastLanguageModel
 
 BASE_MODEL = "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit"
 LORA_MODEL = "factura-qwen-lora"
-MAX_SEQ_LENGTH = 1024
+MAX_SEQ_LENGTH = 2048
 DEFAULT_INSTRUCTION = (
-    "Converti este texto OCR de una factura en un unico objeto JSON valido. "
-    "No inventes datos. Si falta un dato, usa null. "
+    "Converti este texto OCR de una factura ARCA en un unico objeto JSON valido. "
+    "No inventes datos: si falta un dato usa null; para iva, tributos e items usa array vacio. "
     "No agregues texto antes o despues del JSON. "
-    "Usa exactamente estas claves: tipo_comprobante, numero_factura, "
-    "empresa_emisora, identificacion_emisora, cliente, fecha, subtotal, "
-    "impuestos, total, moneda. "
-    "No uses claves distintas como comp_nro, importe_total o total_factura. "
-    "Devuelve valores limpios: numero_factura sin etiquetas como Nro o Comp, "
-    "identificacion_emisora sin la palabra CUIT, y cliente sin el prefijo Cliente. "
-    "La fecha debe estar en formato YYYY-MM-DD. "
-    "Los importes deben ser numeros sin simbolo de moneda. "
-    "La moneda debe ser ARS si la factura esta en pesos argentinos."
+    "Usa exactamente el schema ARCA con estas claves raiz: tipo_comprobante, codigo_comprobante, "
+    "punto_venta, numero_comprobante, numero_factura, fecha_emision, emisor, receptor, moneda, "
+    "tipo_cambio, subtotal, importe_no_gravado, importe_exento, iva_total, tributos_total, "
+    "impuestos, total, cae, fecha_vencimiento_cae, iva, tributos, items. "
+    "emisor y receptor deben tener: nombre, doc_tipo, doc_nro, cuit, condicion_iva. "
+    "Normaliza valores: fechas YYYY-MM-DD, CUIT con guiones en cuit, doc_nro sin guiones, "
+    "punto_venta de 5 digitos, numero_comprobante de 8 digitos, numero_factura como 00000-00000000. "
+    "Usa moneda ARCA: PES para pesos argentinos y DOL para dolares. "
+    "No incluyas etiquetas OCR como CUIT:, Cliente:, Comp. Nro: dentro de los valores."
 )
 REQUIRED_KEYS = {
     "tipo_comprobante",
+    "codigo_comprobante",
+    "punto_venta",
+    "numero_comprobante",
     "numero_factura",
-    "empresa_emisora",
-    "identificacion_emisora",
-    "cliente",
-    "fecha",
+    "fecha_emision",
+    "emisor",
+    "receptor",
+    "moneda",
+    "tipo_cambio",
     "subtotal",
+    "importe_no_gravado",
+    "importe_exento",
+    "iva_total",
+    "tributos_total",
     "impuestos",
     "total",
-    "moneda",
+    "cae",
+    "fecha_vencimiento_cae",
+    "iva",
+    "tributos",
+    "items",
 }
+PERSON_KEYS = {"nombre", "doc_tipo", "doc_nro", "cuit", "condicion_iva"}
 
 
 def build_prompt(ocr_text, instruction=DEFAULT_INSTRUCTION):
@@ -76,7 +89,7 @@ def extract_json(text):
 
 def validate_invoice_json(parsed):
     if parsed is None:
-        return ["La respuesta no contiene un objeto JSON válido."]
+        return ["La respuesta no contiene un objeto JSON valido."]
 
     errors = []
     missing = sorted(REQUIRED_KEYS - set(parsed))
@@ -87,22 +100,62 @@ def validate_invoice_json(parsed):
     if extra:
         errors.append(f"Claves extra: {', '.join(extra)}")
 
-    for key in ("subtotal", "impuestos", "total"):
+    for key in (
+        "tipo_cambio",
+        "subtotal",
+        "importe_no_gravado",
+        "importe_exento",
+        "iva_total",
+        "tributos_total",
+        "impuestos",
+        "total",
+    ):
         value = parsed.get(key)
         if value is not None and not isinstance(value, (int, float)):
-            errors.append(f"{key} debería ser número o null.")
+            errors.append(f"{key} deberia ser numero o null.")
 
     numero = parsed.get("numero_factura")
-    if numero is not None and not re.fullmatch(r"\d{4}-\d{8}", str(numero)):
-        errors.append("numero_factura deberia tener formato 0000-00000000, sin etiquetas.")
+    if numero is not None and not re.fullmatch(r"\d{5}-\d{8}", str(numero)):
+        errors.append("numero_factura deberia tener formato 00000-00000000, sin etiquetas.")
 
-    cuit = parsed.get("identificacion_emisora")
-    if cuit is not None and not re.fullmatch(r"\d{2}-\d{8}-\d", str(cuit)):
-        errors.append("identificacion_emisora deberia tener formato CUIT limpio 00-00000000-0.")
+    punto_venta = parsed.get("punto_venta")
+    if punto_venta is not None and not re.fullmatch(r"\d{5}", str(punto_venta)):
+        errors.append("punto_venta deberia tener 5 digitos.")
 
-    cliente = parsed.get("cliente")
-    if isinstance(cliente, str) and re.match(r"^\s*cliente\s*:", cliente, flags=re.IGNORECASE):
-        errors.append("cliente no deberia incluir el prefijo 'Cliente:'.")
+    numero_comprobante = parsed.get("numero_comprobante")
+    if numero_comprobante is not None and not re.fullmatch(r"\d{8}", str(numero_comprobante)):
+        errors.append("numero_comprobante deberia tener 8 digitos.")
+
+    for date_key in ("fecha_emision", "fecha_vencimiento_cae"):
+        value = parsed.get(date_key)
+        if value is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(value)):
+            errors.append(f"{date_key} deberia tener formato YYYY-MM-DD.")
+
+    cae = parsed.get("cae")
+    if cae is not None and not re.fullmatch(r"\d{14}", str(cae)):
+        errors.append("cae deberia tener 14 digitos.")
+
+    for person_key in ("emisor", "receptor"):
+        person = parsed.get(person_key)
+        if not isinstance(person, dict):
+            errors.append(f"{person_key} deberia ser un objeto.")
+            continue
+        person_missing = sorted(PERSON_KEYS - set(person))
+        person_extra = sorted(set(person) - PERSON_KEYS)
+        if person_missing:
+            errors.append(f"{person_key} sin claves: {', '.join(person_missing)}")
+        if person_extra:
+            errors.append(f"{person_key} con claves extra: {', '.join(person_extra)}")
+        cuit = person.get("cuit")
+        if cuit is not None and not re.fullmatch(r"\d{2}-\d{8}-\d", str(cuit)):
+            errors.append(f"{person_key}.cuit deberia tener formato 00-00000000-0.")
+        doc_nro = person.get("doc_nro")
+        if doc_nro is not None and not re.fullmatch(r"\d+", str(doc_nro)):
+            errors.append(f"{person_key}.doc_nro deberia contener solo numeros.")
+
+    for array_key in ("iva", "tributos", "items"):
+        if not isinstance(parsed.get(array_key), list):
+            errors.append(f"{array_key} deberia ser un array.")
 
     return errors
 
@@ -145,7 +198,7 @@ def run_inference(model_name, ocr_text, max_new_tokens):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Prueba un modelo base o LoRA para convertir OCR de facturas a JSON."
+        description="Prueba un modelo base o LoRA para convertir OCR de facturas ARCA a JSON."
     )
     parser.add_argument(
         "--model",
@@ -155,7 +208,7 @@ def main():
     )
     parser.add_argument("--ocr-file", default="data/test_ocr.txt")
     parser.add_argument("--ocr-text")
-    parser.add_argument("--max-new-tokens", type=int, default=160)
+    parser.add_argument("--max-new-tokens", type=int, default=900)
     args = parser.parse_args()
 
     model_name = BASE_MODEL if args.model == "base" else LORA_MODEL
@@ -168,18 +221,18 @@ def main():
     print("\nRespuesta cruda:")
     print(raw)
 
-    print("\nJSON extraído:")
+    print("\nJSON extraido:")
     if parsed is None:
         print(json_text or "(sin JSON)")
     else:
         print(json.dumps(parsed, ensure_ascii=False, indent=2))
 
-    print("\nValidación:")
+    print("\nValidacion:")
     if errors:
         for error in errors:
             print(f"- {error}")
     else:
-        print("- OK: JSON válido y con las claves esperadas.")
+        print("- OK: JSON valido y con las claves esperadas.")
 
 
 if __name__ == "__main__":

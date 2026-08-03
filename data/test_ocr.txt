@@ -1,9 +1,17 @@
 Factura A
-Comp. Nro: 0008-00009123
+Cod. 001
+Punto de Venta: 00008 Comp. Nro: 00009123
+Fecha de Emision: 14/11/2026
 Servicios del Sur SRL
 CUIT: 30-87654321-0
+IVA Responsable Inscripto
 Cliente: Transporte Norte SA
-Fecha de emision: 14/11/2026
-Subtotal: $88000
-IVA 21%: $18480
-Importe total: $106480
+CUIT Cliente: 30-11223344-5
+Condicion IVA: Responsable Inscripto
+Moneda: PES
+Tipo Cambio: 1
+Neto Gravado: $ 88.000,00
+IVA 21%: $ 18.480,00
+Importe Total: $ 106.480,00
+CAE: 74234567890123
+Vto. CAE: 24/11/2026

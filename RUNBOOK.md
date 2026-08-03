@@ -45,7 +45,7 @@ Resultado esperado:
 - `outputs/checkpoint-20/`
 - `factura-qwen-lora/`
 
-En este workspace ya existe `outputs/checkpoint-20/trainer_state.json` con `global_step: 20` y `epoch: 10.0`, así que la corrida de prueba terminó.
+El entrenamiento actual usa ejemplos ARCA en `data/train.jsonl`, `max_seq_length=2048` y `max_steps=80`, porque el JSON final es mas largo que la prueba inicial.
 
 ## Probar una factura nueva con el LoRA
 
@@ -88,4 +88,4 @@ Para que la medición tenga sentido, conviene separar:
 
 ## Próximo paso recomendado
 
-Antes de crecer el dataset, usar `docs/arca-schema.md` y `schemas/arca_invoice_schema.json` como contrato del JSON final. Luego agregar 30-100 facturas reales anonimizadas de ARCA/OCR, manteniendo ese mismo esquema. Con pocos ejemplos el LoRA puede memorizar formato, pero todavía no demuestra generalización.
+El dataset ya fue adaptado a `docs/arca-schema.md` y `schemas/arca_invoice_schema.json`. El proximo salto es agregar 30-100 facturas reales anonimizadas de ARCA/OCR, manteniendo ese mismo esquema. Con pocos ejemplos el LoRA puede memorizar formato, pero todavia no demuestra generalizacion.

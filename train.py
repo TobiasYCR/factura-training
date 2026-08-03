@@ -1,22 +1,22 @@
 from unsloth import FastLanguageModel, is_bfloat16_supported
 from datasets import load_dataset
 from trl import SFTTrainer, SFTConfig
-import torch
 
-max_seq_length = 1024
+
+max_seq_length = 2048
 strict_instruction = (
-    "Converti este texto OCR de una factura en un unico objeto JSON valido. "
-    "No inventes datos. Si falta un dato, usa null. "
+    "Converti este texto OCR de una factura ARCA en un unico objeto JSON valido. "
+    "No inventes datos: si falta un dato usa null; para iva, tributos e items usa array vacio. "
     "No agregues texto antes o despues del JSON. "
-    "Usa exactamente estas claves: tipo_comprobante, numero_factura, "
-    "empresa_emisora, identificacion_emisora, cliente, fecha, subtotal, "
-    "impuestos, total, moneda. "
-    "No uses claves distintas como comp_nro, importe_total o total_factura. "
-    "Devuelve valores limpios: numero_factura sin etiquetas como Nro o Comp, "
-    "identificacion_emisora sin la palabra CUIT, y cliente sin el prefijo Cliente. "
-    "La fecha debe estar en formato YYYY-MM-DD. "
-    "Los importes deben ser numeros sin simbolo de moneda. "
-    "La moneda debe ser ARS si la factura esta en pesos argentinos."
+    "Usa exactamente el schema ARCA con estas claves raiz: tipo_comprobante, codigo_comprobante, "
+    "punto_venta, numero_comprobante, numero_factura, fecha_emision, emisor, receptor, moneda, "
+    "tipo_cambio, subtotal, importe_no_gravado, importe_exento, iva_total, tributos_total, "
+    "impuestos, total, cae, fecha_vencimiento_cae, iva, tributos, items. "
+    "emisor y receptor deben tener: nombre, doc_tipo, doc_nro, cuit, condicion_iva. "
+    "Normaliza valores: fechas YYYY-MM-DD, CUIT con guiones en cuit, doc_nro sin guiones, "
+    "punto_venta de 5 digitos, numero_comprobante de 8 digitos, numero_factura como 00000-00000000. "
+    "Usa moneda ARCA: PES para pesos argentinos y DOL para dolares. "
+    "No incluyas etiquetas OCR como CUIT:, Cliente:, Comp. Nro: dentro de los valores."
 )
 
 model, tokenizer = FastLanguageModel.from_pretrained(
@@ -45,6 +45,7 @@ dataset = load_dataset(
     split="train",
 )
 
+
 def format_example(example):
     text = f"""### Instruccion:
 {strict_instruction}
@@ -55,6 +56,7 @@ def format_example(example):
 ### Respuesta:
 {example["output"]}{tokenizer.eos_token}"""
     return {"text": text}
+
 
 dataset = dataset.map(format_example)
 
@@ -67,8 +69,8 @@ trainer = SFTTrainer(
         max_length=max_seq_length,
         per_device_train_batch_size=1,
         gradient_accumulation_steps=4,
-        warmup_steps=2,
-        max_steps=20,
+        warmup_steps=5,
+        max_steps=80,
         learning_rate=2e-4,
         logging_steps=1,
         optim="adamw_8bit",
