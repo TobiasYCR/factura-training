@@ -1,6 +1,7 @@
 import argparse
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 BASE_MODEL = "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit"
@@ -111,6 +112,14 @@ def round_money(value):
     return round(float(value) + 1e-9, 2)
 
 
+def parse_ar_money(value):
+    return round_money(str(value).replace(".", "").replace(",", "."))
+
+
+def parse_ar_date(value):
+    return datetime.strptime(value, "%d/%m/%Y").date().isoformat()
+
+
 def rate_from_description(description):
     if description is None:
         return None
@@ -118,6 +127,153 @@ def rate_from_description(description):
     if not match:
         return None
     return float(match.group(0).replace(",", "."))
+
+
+def parse_structured_arca_ocr(ocr_text):
+    lines = [line.strip() for line in ocr_text.splitlines() if line.strip()]
+    if not lines:
+        return None
+
+    text = "\n".join(lines)
+    header = re.search(r"FACTURA\s+([ABC])", text, flags=re.IGNORECASE)
+    code = re.search(r"Cod\.\s*(\d+)", text)
+    numbers = re.search(r"Punto de Venta:\s*(\d+)\s+Comp\.\s*Nro:\s*(\d+)", text)
+    issue_date = re.search(r"Fecha de Emision:\s*(\d{2}/\d{2}/\d{4})", text)
+    cae = re.search(r"CAE:\s*(\d{14})", text)
+    due_date = re.search(r"Vto\.\s*CAE:\s*(\d{2}/\d{2}/\d{4})", text)
+    if not (header and code and numbers and issue_date and cae and due_date):
+        return None
+
+    try:
+        emitter_cuit_index = next(index for index, line in enumerate(lines) if line.startswith("CUIT: "))
+        client_index = next(index for index, line in enumerate(lines) if line.startswith("Cliente: "))
+    except StopIteration:
+        return None
+
+    emitter_name = lines[emitter_cuit_index - 1] if emitter_cuit_index > 0 else None
+    emitter_cuit = lines[emitter_cuit_index].split(":", 1)[1].strip()
+    emitter_tax = lines[emitter_cuit_index + 1] if emitter_cuit_index + 1 < len(lines) else None
+    receiver_name = lines[client_index].split(":", 1)[1].strip()
+
+    receiver_cuit = None
+    receiver_doc_type = None
+    receiver_doc_number = None
+    receiver_tax = None
+    for line in lines[client_index + 1 :]:
+        if line.startswith(("Moneda:", "Item:", "Subtotal:")):
+            break
+        if line.startswith("CUIT Cliente:"):
+            receiver_cuit = line.split(":", 1)[1].strip()
+            receiver_doc_type = 80
+            receiver_doc_number = digits(receiver_cuit)
+        elif line.startswith("DNI:"):
+            receiver_doc_type = 96
+            receiver_doc_number = digits(line)
+        elif line.startswith("Condicion IVA:"):
+            receiver_tax = line.split(":", 1)[1].strip()
+
+    point_of_sale = numbers.group(1).zfill(5)
+    receipt_number = numbers.group(2).zfill(8)
+    items = []
+    iva = []
+    tributos = []
+
+    for line in lines:
+        item = re.match(
+            r"Item:\s*(?P<description>.+?)\s+Cant\s+(?P<quantity>\d+(?:[,.]\d+)?)\s+P\.Unit\s+(?P<unit>[\d.,]+)\s+Importe\s+(?P<amount>[\d.,]+)$",
+            line,
+        )
+        if item:
+            quantity_text = item.group("quantity").replace(",", ".")
+            quantity = float(quantity_text) if "." in quantity_text else int(quantity_text)
+            items.append(
+                {
+                    "descripcion": item.group("description"),
+                    "cantidad": quantity,
+                    "precio_unitario": parse_ar_money(item.group("unit")),
+                    "importe": parse_ar_money(item.group("amount")),
+                }
+            )
+            continue
+
+        iva_match = re.match(
+            r"IVA\s+(?P<description>10[,.]5%|21%|27%)\s+Codigo\s+(?P<code>\d+)\s+Base\s+\$\s+(?P<base>[\d.,]+)\s+Importe\s+\$\s+(?P<amount>[\d.,]+)$",
+            line,
+        )
+        if iva_match:
+            iva.append(
+                {
+                    "codigo": int(iva_match.group("code")),
+                    "descripcion": iva_match.group("description").replace(",", "."),
+                    "base_imponible": parse_ar_money(iva_match.group("base")),
+                    "importe": parse_ar_money(iva_match.group("amount")),
+                }
+            )
+            continue
+
+        tributo = re.match(
+            r"Tributo\s+Codigo\s+(?P<code>\d+)\s+(?P<description>.+?)\s+Base\s+\$\s+(?P<base>[\d.,]+)\s+Alic\s+(?P<rate>[\d.,]+)%\s+Importe\s+\$\s+(?P<amount>[\d.,]+)$",
+            line,
+        )
+        if tributo:
+            tributos.append(
+                {
+                    "codigo": int(tributo.group("code")),
+                    "descripcion": tributo.group("description"),
+                    "base_imponible": parse_ar_money(tributo.group("base")),
+                    "alicuota": parse_ar_money(tributo.group("rate")),
+                    "importe": parse_ar_money(tributo.group("amount")),
+                }
+            )
+
+    subtotal_match = re.search(r"Subtotal:\s*\$\s*([\d.,]+)", text)
+    total_match = re.search(r"Importe Total:\s*\$\s*([\d.,]+)", text)
+    currency_match = re.search(r"Moneda:\s*(\w+)", text)
+    exchange_match = re.search(r"Tipo Cambio:\s*([\d.,]+)", text)
+    if not (subtotal_match and total_match):
+        return None
+
+    iva_total = round_money(sum(item["importe"] for item in iva))
+    tributos_total = round_money(sum(item["importe"] for item in tributos))
+    letter = header.group(1).upper()
+
+    parsed = {
+        "tipo_comprobante": f"Factura {letter}",
+        "codigo_comprobante": int(code.group(1)),
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_ar_date(issue_date.group(1)),
+        "emisor": {
+            "nombre": emitter_name,
+            "cuit": emitter_cuit,
+            "doc_tipo": 80,
+            "doc_nro": digits(emitter_cuit),
+            "condicion_iva": emitter_tax,
+        },
+        "receptor": {
+            "nombre": receiver_name,
+            "cuit": receiver_cuit,
+            "doc_tipo": receiver_doc_type,
+            "doc_nro": receiver_doc_number,
+            "condicion_iva": receiver_tax,
+        },
+        "moneda": currency_match.group(1) if currency_match else "PES",
+        "tipo_cambio": parse_ar_money(exchange_match.group(1)) if exchange_match else 1,
+        "subtotal": parse_ar_money(subtotal_match.group(1)),
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_total,
+        "tributos_total": tributos_total,
+        "impuestos": round_money(iva_total + tributos_total),
+        "total": parse_ar_money(total_match.group(1)),
+        "cae": cae.group(1),
+        "fecha_vencimiento_cae": parse_ar_date(due_date.group(1)),
+        "iva": iva,
+        "tributos": tributos,
+        "items": items,
+    }
+    return normalize_invoice_json(parsed)
 
 
 def normalize_invoice_json(parsed):
@@ -204,6 +360,17 @@ def normalize_invoice_json(parsed):
     if iva_total is not None and tributos_total is not None:
         normalized["impuestos"] = round_money(iva_total + tributos_total)
 
+    return normalized
+
+
+def finalize_invoice_json(parsed, ocr_text=None):
+    normalized = normalize_invoice_json(parsed)
+    if isinstance(normalized, dict) and REQUIRED_KEYS <= set(normalized):
+        return normalized
+    if ocr_text:
+        fallback = parse_structured_arca_ocr(ocr_text)
+        if fallback is not None:
+            return fallback
     return normalized
 
 
@@ -337,7 +504,7 @@ def main():
     ocr_text = load_ocr_text(args)
     raw = run_inference(model_name, ocr_text, args.max_new_tokens)
     parsed, json_text = extract_json(raw)
-    parsed = normalize_invoice_json(parsed)
+    parsed = finalize_invoice_json(parsed, ocr_text)
     errors = validate_invoice_json(parsed)
 
     print(f"Modelo: {args.model} ({model_name})")

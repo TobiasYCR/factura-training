@@ -8,9 +8,9 @@ from infer import (
     BASE_MODEL,
     LORA_MODEL,
     extract_json,
+    finalize_invoice_json,
     generate_with_loaded_model,
     load_model,
-    normalize_invoice_json,
     validate_invoice_json,
 )
 
@@ -62,7 +62,7 @@ def evaluate_model(label, model_name, examples, max_new_tokens):
         expected = parse_expected(item)
         raw = generate_with_loaded_model(model, tokenizer, item["input"], max_new_tokens)
         actual, _ = extract_json(raw)
-        actual = normalize_invoice_json(actual)
+        actual = finalize_invoice_json(actual, item["input"])
         validation_errors = validate_invoice_json(actual)
         rows = compare_fields(actual, expected)
         passed = sum(1 for _, ok, _, _ in rows if ok)
