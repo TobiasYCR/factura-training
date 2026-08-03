@@ -1,4 +1,5 @@
 data/synthetic_invoices/pdfs/
 data/synthetic_invoices/ocr/
 data/synthetic_invoices/*_preview-*.png
+data/synthetic_eval*/
 __pycache__/

@@ -5,12 +5,20 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
-from reportlab.graphics.barcode import qr
-from reportlab.graphics.shapes import Drawing
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
+try:
+    from reportlab.graphics.barcode import qr
+    from reportlab.graphics.shapes import Drawing
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
+except ModuleNotFoundError:
+    qr = None
+    Drawing = None
+    colors = None
+    A4 = None
+    mm = None
+    canvas = None
 
 
 INSTRUCTION = (
@@ -248,7 +256,8 @@ def ocr_text(label: dict, rng: random.Random) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def draw_box(c: canvas.Canvas, x: float, y: float, w: float, h: float, stroke=colors.black, fill=None):
+def draw_box(c, x: float, y: float, w: float, h: float, stroke=None, fill=None):
+    stroke = stroke or colors.black
     c.setStrokeColor(stroke)
     if fill:
         c.setFillColor(fill)
@@ -259,6 +268,9 @@ def draw_box(c: canvas.Canvas, x: float, y: float, w: float, h: float, stroke=co
 
 
 def draw_invoice_pdf(label: dict, output_path: Path, layout: int):
+    if canvas is None:
+        raise RuntimeError("reportlab no esta instalado; no se pueden generar PDFs.")
+
     c = canvas.Canvas(str(output_path), pagesize=A4)
     width, height = A4
     margin = 14 * mm
@@ -390,13 +402,18 @@ def main():
     parser.add_argument("--count", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", default="data/synthetic_invoices")
+    parser.add_argument("--no-pdf", action="store_true", help="Genera solo JSONL/OCR/manifest sin PDFs.")
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
     out = Path(args.output_dir)
     pdf_dir = out / "pdfs"
     ocr_dir = out / "ocr"
-    pdf_dir.mkdir(parents=True, exist_ok=True)
+    write_pdfs = not args.no_pdf and canvas is not None
+    if not write_pdfs and not args.no_pdf:
+        print("Aviso: reportlab no esta instalado; se generan solo JSONL/OCR/manifest sin PDFs.")
+    if write_pdfs:
+        pdf_dir.mkdir(parents=True, exist_ok=True)
     ocr_dir.mkdir(parents=True, exist_ok=True)
 
     train_path = out / "synthetic_train.jsonl"
@@ -408,7 +425,8 @@ def main():
             pdf_path = pdf_dir / f"{stem}.pdf"
             ocr_path = ocr_dir / f"{stem}.txt"
             text = ocr_text(label, rng)
-            draw_invoice_pdf(label, pdf_path, idx % 4)
+            if write_pdfs:
+                draw_invoice_pdf(label, pdf_path, idx % 4)
             ocr_path.write_text(text, encoding="utf-8")
             train_file.write(
                 json.dumps(
@@ -421,6 +439,7 @@ def main():
                 json.dumps(
                     {
                         "pdf": str(pdf_path),
+                        "pdf_generado": write_pdfs,
                         "ocr": str(ocr_path),
                         "tipo_comprobante": label["tipo_comprobante"],
                         "numero_factura": label["numero_factura"],
@@ -432,7 +451,10 @@ def main():
 
     print(f"Generadas {args.count} facturas sinteticas en {out}")
     print(f"Dataset JSONL: {train_path}")
-    print(f"PDFs: {pdf_dir}")
+    if write_pdfs:
+        print(f"PDFs: {pdf_dir}")
+    else:
+        print("PDFs: omitidos")
 
 
 if __name__ == "__main__":
