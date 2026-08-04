@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://factura-training.local/schemas/external_provider_document_schema.json",
+  "title": "External provider receipt/invoice extraction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "document_type",
+    "provider",
+    "buyer",
+    "document",
+    "currency",
+    "subtotal",
+    "taxes",
+    "fees",
+    "total",
+    "paid",
+    "balance_due",
+    "payment",
+    "items",
+    "notes"
+  ],
+  "properties": {
+    "document_type": {
+      "type": "string",
+      "enum": ["external_provider_receipt", "external_provider_invoice"]
+    },
+    "provider": { "$ref": "#/$defs/party" },
+    "buyer": { "$ref": "#/$defs/party" },
+    "document": { "$ref": "#/$defs/document_info" },
+    "currency": {
+      "type": ["string", "null"],
+      "pattern": "^[A-Z]{3}$"
+    },
+    "subtotal": { "type": ["number", "null"] },
+    "taxes": { "type": ["number", "null"] },
+    "fees": { "type": ["number", "null"] },
+    "total": { "type": ["number", "null"] },
+    "paid": { "type": ["number", "null"] },
+    "balance_due": { "type": ["number", "null"] },
+    "payment": { "$ref": "#/$defs/payment" },
+    "items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/item" }
+    },
+    "notes": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "party": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "business_name", "tax_id", "vat_number", "address", "country", "phone"],
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "business_name": { "type": ["string", "null"] },
+        "tax_id": { "type": ["string", "null"] },
+        "vat_number": { "type": ["string", "null"] },
+        "address": { "type": ["string", "null"] },
+        "country": { "type": ["string", "null"] },
+        "phone": { "type": ["string", "null"] }
+      }
+    },
+    "document_info": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "number", "date", "account_number", "customer_number", "status"],
+      "properties": {
+        "title": { "type": ["string", "null"] },
+        "number": { "type": ["string", "null"] },
+        "date": {
+          "type": ["string", "null"],
+          "format": "date"
+        },
+        "account_number": { "type": ["string", "null"] },
+        "customer_number": { "type": ["string", "null"] },
+        "status": { "type": ["string", "null"] }
+      }
+    },
+    "payment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "card_brand", "card_last4", "amount"],
+      "properties": {
+        "method": { "type": ["string", "null"] },
+        "card_brand": { "type": ["string", "null"] },
+        "card_last4": {
+          "type": ["string", "null"],
+          "pattern": "^\\d{4}$"
+        },
+        "amount": { "type": ["number", "null"] }
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "quantity", "unit_price", "amount", "term", "reference"],
+      "properties": {
+        "description": { "type": ["string", "null"] },
+        "quantity": { "type": ["number", "null"] },
+        "unit_price": { "type": ["number", "null"] },
+        "amount": { "type": ["number", "null"] },
+        "term": { "type": ["string", "null"] },
+        "reference": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

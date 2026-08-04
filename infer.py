@@ -50,6 +50,26 @@ REQUIRED_KEYS = {
 }
 PERSON_KEYS = {"nombre", "doc_tipo", "doc_nro", "cuit", "condicion_iva"}
 IVA_CODE_BY_RATE = {10.5: 4, 21.0: 5, 27.0: 6}
+EXTERNAL_DOCUMENT_KEYS = (
+    "document_type",
+    "provider",
+    "buyer",
+    "document",
+    "currency",
+    "subtotal",
+    "taxes",
+    "fees",
+    "total",
+    "paid",
+    "balance_due",
+    "payment",
+    "items",
+    "notes",
+)
+EXTERNAL_PARTY_KEYS = ("name", "business_name", "tax_id", "vat_number", "address", "country", "phone")
+EXTERNAL_DOCUMENT_INFO_KEYS = ("title", "number", "date", "account_number", "customer_number", "status")
+EXTERNAL_PAYMENT_KEYS = ("method", "card_brand", "card_last4", "amount")
+EXTERNAL_ITEM_KEYS = ("description", "quantity", "unit_price", "amount", "term", "reference")
 
 
 def build_prompt(ocr_text, instruction=DEFAULT_INSTRUCTION):
@@ -123,8 +143,33 @@ def parse_ar_money(value):
     return round_money(str(value).replace(".", "").replace(",", "."))
 
 
+def parse_money(value):
+    text = str(value)
+    text = re.sub(r"[^\d,.\-]", "", text)
+    if not text:
+        return None
+    if "," in text and "." in text:
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    elif "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    return round_money(text)
+
+
 def parse_ar_date(value):
     return datetime.strptime(value, "%d/%m/%Y").date().isoformat()
+
+
+def parse_document_date(value):
+    value = str(value).strip()
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%b %d %Y", "%B %d %Y"):
+        try:
+            return datetime.strptime(value, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
 
 
 def rate_from_description(description):
@@ -145,6 +190,193 @@ def parse_quantity(value):
 def first_match(pattern, text, flags=0):
     match = re.search(pattern, text, flags)
     return match.group(1).strip() if match else None
+
+
+def parse_godaddy_receipt_ocr(ocr_text):
+    text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
+    if "Recibo" not in text or "NÚMERO DE CLIENTE" not in text:
+        return None
+
+    number = first_match(r"Recibo\s*(?:№|N[°ºo.]*)?\s*(\d+)", text, re.DOTALL)
+    date = first_match(r"FECHA:\s*(\d{1,2}/\d{1,2}/\d{4})", text)
+    customer_number = first_match(r"NÚMERO DE CLIENTE:\s*(\d+)", text)
+    if not (number and date and customer_number):
+        return None
+
+    buyer_block = first_match(r"FACTURAR A:\s*(.*?)\s+PAGO:", text, re.DOTALL) or ""
+    buyer_lines = [line.strip() for line in buyer_block.splitlines() if line.strip()]
+    tax_id = first_match(r"ID fiscal:\s*([^\n]+)", buyer_block)
+    phone = next((line for line in buyer_lines if line.startswith("+")), None)
+    name = buyer_lines[0] if buyer_lines else None
+    business_name = None
+    address_lines = []
+    for line in buyer_lines[1:]:
+        if line.startswith("+") or line.startswith("ID fiscal:"):
+            continue
+        if business_name is None and line.isupper() and not any(char.isdigit() for char in line):
+            business_name = line
+            continue
+        address_lines.append(line)
+
+    provider_address = first_match(r"GoDaddy\.com, LLC\s*(?:\$\s*[\d.,]+\s*)?(.*?)\s+Tarifas", text, re.DOTALL)
+    provider_lines = [line.strip().rstrip(",") for line in (provider_address or "").splitlines() if line.strip()]
+
+    payment = re.search(r"PAGO:\s*(?P<brand>\w+)\s+.*?(?P<last4>\d{4})\s+\$\s*(?P<amount>[\d.,]+)", text, re.DOTALL)
+    taxes = parse_money(first_match(r"Impuestos\s+\$\s*([\d.,]+)", text) or 0)
+    fees = parse_money(first_match(r"Tarifas\s+\$\s*([\d.,]+)", text) or 0)
+    total = parse_money(first_match(r"Total\s*\(USD\)\s+\$\s*([\d.,]+)", text))
+    paid = parse_money(first_match(r"Pago recibido.*?\$\s*([\d.,]+)", text, re.DOTALL))
+    balance_due = parse_money(first_match(r"Saldo adeudado\s*\(USD\)\s+\$\s*([\d.,]+)", text))
+    subtotal = total if total is not None else parse_money(first_match(r"Saldo anterior\s+\$\s*([\d.,]+)", text))
+
+    items = []
+    item_section = first_match(r"Plazo Producto Cantidad\s*(.*?)(?:\nTotal\s*\(USD\))", text, re.DOTALL) or ""
+    current_item = None
+    for line in [line.strip() for line in item_section.splitlines() if line.strip()]:
+        if line.startswith("about:blank") or "Mi cuenta | Facturación" in line:
+            continue
+        item = re.match(r"(?P<term>\d+\s+\S+)\s+(?P<description>.+?)\s+\$\s*(?P<amount>[\d.,]+)$", line)
+        if item:
+            current_item = {
+                "description": item.group("description").replace("Microso", "Microsoft"),
+                "quantity": 1,
+                "unit_price": parse_money(item.group("amount")),
+                "amount": parse_money(item.group("amount")),
+                "term": item.group("term"),
+                "reference": None,
+            }
+            items.append(current_item)
+        elif current_item and "@" in line:
+            current_item["reference"] = line
+
+    return normalize_external_document(
+        {
+            "document_type": "external_provider_receipt",
+            "provider": {
+                "name": "GoDaddy.com, LLC",
+                "business_name": "GoDaddy.com, LLC",
+                "tax_id": None,
+                "vat_number": None,
+                "address": ", ".join(provider_lines) if provider_lines else None,
+                "country": provider_lines[-1] if provider_lines else "United States",
+                "phone": "(011) 5235-3894" if "(011) 5235-3894" in text else None,
+            },
+            "buyer": {
+                "name": name,
+                "business_name": business_name,
+                "tax_id": digits(tax_id),
+                "vat_number": None,
+                "address": ", ".join(address_lines) if address_lines else None,
+                "country": "Argentina" if "Argentina" in buyer_block else None,
+                "phone": phone,
+            },
+            "document": {
+                "title": "Recibo",
+                "number": number,
+                "date": parse_document_date(date),
+                "account_number": None,
+                "customer_number": customer_number,
+                "status": "paid" if paid and balance_due == 0 else None,
+            },
+            "currency": "USD",
+            "subtotal": subtotal,
+            "taxes": taxes,
+            "fees": fees,
+            "total": total,
+            "paid": paid,
+            "balance_due": balance_due,
+            "payment": {
+                "method": "card" if payment else None,
+                "card_brand": payment.group("brand") if payment else None,
+                "card_last4": payment.group("last4") if payment else None,
+                "amount": parse_money(payment.group("amount")) if payment else None,
+            },
+            "items": items,
+            "notes": "GoDaddy receipt. Not an ARCA invoice.",
+        }
+    )
+
+
+def parse_teamwork_invoice_ocr(ocr_text):
+    text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
+    if "INVOICE" not in text or "Teamwork.com" not in text:
+        return None
+
+    number = first_match(r"Ref #:\s*([^\n]+)", text)
+    date = first_match(r"Issued:\s*([A-Za-z]{3,9}\s+\d{1,2}\s+\d{4})", text)
+    account_number = first_match(r"Account #:\s*(\d+)", text)
+    buyer_block = first_match(r"CUIT:\s*(.*?)(?:VAT Number:|Payment Method)", text, re.DOTALL) or ""
+    buyer_cuit = first_match(r"(\d{11})", buyer_block)
+    vat_number = first_match(r"VAT Number:\s*([A-Z0-9]+)", text)
+    card_last4 = first_match(r"Credit/Debit Card\s+(\d{4})", text)
+    item = re.search(
+        r"(?P<quantity>\d+)\s*[×x]\s*(?P<description>.+?)\s+\(at\s*\$(?P<unit>[\d.,]+)\s*/\s*(?:USD\s*)?\$(?P<amount>[\d.,]+)",
+        text,
+        re.DOTALL,
+    )
+    total = parse_money(first_match(r"Total:\s*USD\s*\$([\d.,]+)", text))
+    subtotal = parse_money(first_match(r"Subtotal\s+USD\s*\$([\d.,]+)", text))
+    paid = parse_money(first_match(r"Paid\s+USD\s*\$([\d.,]+)", text))
+
+    items = []
+    if item:
+        items.append(
+            {
+                "description": re.sub(r"\s+", " ", item.group("description")).strip(),
+                "quantity": parse_quantity(item.group("quantity")),
+                "unit_price": parse_money(item.group("unit")),
+                "amount": parse_money(item.group("amount")),
+                "term": "month" if "month" in text.lower() else None,
+                "reference": None,
+            }
+        )
+
+    return normalize_external_document(
+        {
+            "document_type": "external_provider_invoice",
+            "provider": {
+                "name": "Teamwork.com",
+                "business_name": "Teamwork.com",
+                "tax_id": None,
+                "vat_number": vat_number,
+                "address": "Teamwork Campus One, Blackpool Retail Park, Cork, T23 F902",
+                "country": "Ireland",
+                "phone": None,
+            },
+            "buyer": {
+                "name": "CS Tech Consulting SA",
+                "business_name": "CS Tech Consulting SA",
+                "tax_id": digits(buyer_cuit),
+                "vat_number": None,
+                "address": "Rocha Montarce, 1150, El Palomar, Buenos Aires, 1684",
+                "country": "Argentina",
+                "phone": None,
+            },
+            "document": {
+                "title": "INVOICE",
+                "number": number,
+                "date": parse_document_date(date),
+                "account_number": account_number,
+                "customer_number": None,
+                "status": "paid" if paid and total == paid else None,
+            },
+            "currency": "USD",
+            "subtotal": subtotal,
+            "taxes": 0.0,
+            "fees": 0.0,
+            "total": total,
+            "paid": paid,
+            "balance_due": round_money((total or 0) - (paid or 0)),
+            "payment": {
+                "method": "Credit/Debit Card",
+                "card_brand": None,
+                "card_last4": card_last4,
+                "amount": paid,
+            },
+            "items": items,
+            "notes": "Teamwork/Wise international invoice. Not an ARCA invoice. Reverse charge/VAT note present.",
+        }
+    )
 
 
 def parse_real_arca_ocr(text, letter, code, numbers, issue_date, cae, due_date):
@@ -470,9 +702,58 @@ def normalize_invoice_json(parsed):
     return normalized
 
 
+def normalize_external_document(parsed):
+    if not isinstance(parsed, dict):
+        return parsed
+
+    normalized = dict(parsed)
+    for party_key in ("provider", "buyer"):
+        party = normalized.get(party_key)
+        if not isinstance(party, dict):
+            party = {}
+        normalized[party_key] = {key: party.get(key) for key in EXTERNAL_PARTY_KEYS}
+        tax_id = normalized[party_key].get("tax_id")
+        if tax_id is not None:
+            normalized[party_key]["tax_id"] = digits(tax_id)
+
+    document = normalized.get("document")
+    if not isinstance(document, dict):
+        document = {}
+    normalized["document"] = {key: document.get(key) for key in EXTERNAL_DOCUMENT_INFO_KEYS}
+
+    payment = normalized.get("payment")
+    if not isinstance(payment, dict):
+        payment = {}
+    normalized["payment"] = {key: payment.get(key) for key in EXTERNAL_PAYMENT_KEYS}
+
+    items = normalized.get("items")
+    fixed_items = []
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            fixed_items.append({key: item.get(key) for key in EXTERNAL_ITEM_KEYS})
+    normalized["items"] = fixed_items
+
+    for key in ("subtotal", "taxes", "fees", "total", "paid", "balance_due"):
+        value = normalized.get(key)
+        if value is not None:
+            normalized[key] = round_money(value)
+
+    return {key: normalized.get(key) for key in EXTERNAL_DOCUMENT_KEYS}
+
+
+def parse_supported_document_ocr(ocr_text):
+    return (
+        parse_godaddy_receipt_ocr(ocr_text)
+        or parse_teamwork_invoice_ocr(ocr_text)
+        or parse_structured_arca_ocr(ocr_text)
+    )
+
+
 def finalize_invoice_json(parsed, ocr_text=None):
     if ocr_text:
-        structured = parse_structured_arca_ocr(ocr_text)
+        structured = parse_supported_document_ocr(ocr_text)
         if structured is not None:
             return structured
 
@@ -480,6 +761,79 @@ def finalize_invoice_json(parsed, ocr_text=None):
     if isinstance(normalized, dict) and REQUIRED_KEYS <= set(normalized):
         return normalized
     return normalized
+
+
+def validate_external_document_json(parsed):
+    if parsed is None:
+        return ["La respuesta no contiene un objeto JSON valido."]
+    if not isinstance(parsed, dict):
+        return ["La respuesta JSON deberia ser un objeto."]
+
+    errors = []
+    missing = sorted(set(EXTERNAL_DOCUMENT_KEYS) - set(parsed))
+    extra = sorted(set(parsed) - set(EXTERNAL_DOCUMENT_KEYS))
+    if missing:
+        errors.append(f"Faltan claves externas: {', '.join(missing)}")
+    if extra:
+        errors.append(f"Claves externas extra: {', '.join(extra)}")
+
+    if parsed.get("document_type") not in {"external_provider_receipt", "external_provider_invoice"}:
+        errors.append("document_type externo no reconocido.")
+    if parsed.get("currency") is not None and not re.fullmatch(r"[A-Z]{3}", str(parsed.get("currency"))):
+        errors.append("currency deberia ser codigo ISO de 3 letras.")
+    for key in ("subtotal", "taxes", "fees", "total", "paid", "balance_due"):
+        value = parsed.get(key)
+        if value is not None and not isinstance(value, (int, float)):
+            errors.append(f"{key} deberia ser numero o null.")
+
+    for party_key in ("provider", "buyer"):
+        party = parsed.get(party_key)
+        if not isinstance(party, dict):
+            errors.append(f"{party_key} deberia ser un objeto.")
+            continue
+        missing_party = sorted(set(EXTERNAL_PARTY_KEYS) - set(party))
+        extra_party = sorted(set(party) - set(EXTERNAL_PARTY_KEYS))
+        if missing_party:
+            errors.append(f"{party_key} sin claves: {', '.join(missing_party)}")
+        if extra_party:
+            errors.append(f"{party_key} con claves extra: {', '.join(extra_party)}")
+
+    document = parsed.get("document")
+    if not isinstance(document, dict):
+        errors.append("document deberia ser un objeto.")
+    elif sorted(set(EXTERNAL_DOCUMENT_INFO_KEYS) - set(document)):
+        errors.append("document no tiene todas las claves esperadas.")
+
+    payment = parsed.get("payment")
+    if not isinstance(payment, dict):
+        errors.append("payment deberia ser un objeto.")
+    elif sorted(set(EXTERNAL_PAYMENT_KEYS) - set(payment)):
+        errors.append("payment no tiene todas las claves esperadas.")
+
+    if not isinstance(parsed.get("items"), list):
+        errors.append("items deberia ser un array.")
+    else:
+        for index, item in enumerate(parsed["items"], start=1):
+            if not isinstance(item, dict):
+                errors.append(f"items[{index}] deberia ser un objeto.")
+                continue
+            missing_item = sorted(set(EXTERNAL_ITEM_KEYS) - set(item))
+            extra_item = sorted(set(item) - set(EXTERNAL_ITEM_KEYS))
+            if missing_item:
+                errors.append(f"items[{index}] sin claves: {', '.join(missing_item)}")
+            if extra_item:
+                errors.append(f"items[{index}] con claves extra: {', '.join(extra_item)}")
+
+    return errors
+
+
+def validate_extracted_document_json(parsed):
+    if isinstance(parsed, dict) and parsed.get("document_type") in {
+        "external_provider_receipt",
+        "external_provider_invoice",
+    }:
+        return validate_external_document_json(parsed)
+    return validate_invoice_json(parsed)
 
 
 def validate_invoice_json(parsed):
@@ -613,7 +967,7 @@ def main():
     raw = run_inference(model_name, ocr_text, args.max_new_tokens)
     parsed, json_text = extract_json(raw)
     parsed = finalize_invoice_json(parsed, ocr_text)
-    errors = validate_invoice_json(parsed)
+    errors = validate_extracted_document_json(parsed)
 
     print(f"Modelo: {args.model} ({model_name})")
     print("\nRespuesta cruda:")

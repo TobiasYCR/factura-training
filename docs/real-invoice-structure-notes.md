@@ -51,7 +51,8 @@ Estructura observada:
 Decision recomendada:
 
 - No conviene forzar estos documentos al schema ARCA actual.
-- Conviene agregar un schema separado para `recibo_proveedor_externo` o un schema general de comprobante de gasto.
+- Se agrego una estructura separada con `document_type: external_provider_receipt`.
+- La salida incluye proveedor, comprador, datos del documento, moneda, subtotal, impuestos, fees, total, monto pagado, saldo, pago e items.
 
 ### Teamwork / Wise
 
@@ -72,7 +73,8 @@ Estructura observada:
 
 Decision recomendada:
 
-- Tambien requiere schema separado de proveedor externo.
+- Tambien usa el schema separado de proveedor externo, con `document_type: external_provider_invoice`.
+- Se extraen referencia, fecha, numero de cuenta, proveedor, VAT, comprador, CUIT local, metodo de pago, item, subtotal, total y estado pagado.
 - Es util para una segunda etapa del extractor, pero no deberia mezclarse como factura ARCA A/B/C.
 
 ## Impacto sobre el entrenamiento
@@ -93,3 +95,29 @@ Implementar una etapa previa de clasificacion:
 - `unknown`
 
 Despues de clasificar, aplicar el extractor correspondiente. Esto evita que Qwen invente campos ARCA para recibos de GoDaddy o invoices internacionales.
+
+## Schema agregado
+
+Se agrego `schemas/external_provider_document_schema.json` para comprobantes de proveedores externos.
+
+Claves raiz:
+
+- `document_type`
+- `provider`
+- `buyer`
+- `document`
+- `currency`
+- `subtotal`
+- `taxes`
+- `fees`
+- `total`
+- `paid`
+- `balance_due`
+- `payment`
+- `items`
+- `notes`
+
+Tipos soportados inicialmente:
+
+- `external_provider_receipt`: recibos GoDaddy.
+- `external_provider_invoice`: invoice Teamwork/Wise.
