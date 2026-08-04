@@ -104,6 +104,13 @@ def digits(value):
     return re.sub(r"\D", "", str(value))
 
 
+def format_cuit(value):
+    cuit_digits = digits(value)
+    if cuit_digits and len(cuit_digits) == 11:
+        return f"{cuit_digits[:2]}-{cuit_digits[2:10]}-{cuit_digits[10]}"
+    return value
+
+
 def as_number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
@@ -129,20 +136,121 @@ def rate_from_description(description):
     return float(match.group(0).replace(",", "."))
 
 
+def parse_quantity(value):
+    normalized = str(value).replace(",", ".")
+    quantity = float(normalized)
+    return int(quantity) if quantity.is_integer() else quantity
+
+
+def first_match(pattern, text, flags=0):
+    match = re.search(pattern, text, flags)
+    return match.group(1).strip() if match else None
+
+
+def parse_real_arca_ocr(text, letter, code, numbers, issue_date, cae, due_date):
+    if "Apellido y Nombre / Raz" not in text:
+        return None
+
+    emitter_name = first_match(r"Raz[oó]n Social:\s*(.*?)\s+Fecha de Emisi[oó]n", text)
+    emitter_cuit = first_match(r"Domicilio Comercial:.*?CUIT:\s*(\d{11}|\d{2}-\d{8}-\d)", text, re.DOTALL)
+    emitter_tax = first_match(r"Condici[oó]n frente al IVA:\s*(.*?)\s+Fecha de Inicio", text)
+    receiver = re.search(
+        r"\nCUIT:\s*(?P<cuit>\d{11}|\d{2}-\d{8}-\d)\s+Apellido y Nombre / Raz[oó]n Social:\s*(?P<name>.*?)(?:\n|$)",
+        text,
+    )
+    if not (emitter_name and emitter_cuit and emitter_tax and receiver):
+        return None
+
+    receiver_tax = None
+    tax_matches = re.findall(r"Condici[oó]n frente al IVA:\s*(.*?)(?:\s+Domicilio:|\s+Fecha de Inicio|\n)", text)
+    if len(tax_matches) >= 2:
+        receiver_tax = tax_matches[1].strip()
+
+    point_of_sale = numbers.group(1).zfill(5)
+    receipt_number = numbers.group(2).zfill(8)
+    subtotal = parse_ar_money(first_match(r"Subtotal:\s*\$\s*([\d.,]+)", text) or 0)
+    tributos_total = parse_ar_money(first_match(r"Importe Otros Tributos:\s*\$\s*([\d.,]+)", text) or 0)
+    total = parse_ar_money(first_match(r"Importe Total:\s*\$\s*([\d.,]+)", text) or subtotal)
+
+    items = []
+    seen_items = set()
+    for line in text.splitlines():
+        item_match = re.match(
+            r"(?P<code>\d{2})\s+(?P<description>.+?)\s+(?P<quantity>\d+(?:[,.]\d+)?)\s+(?P<unit_name>\S+)\s+(?P<unit>[\d.,]+)\s+(?P<discount_rate>[\d.,]+)\s+(?P<discount_amount>[\d.,]+)\s+(?P<amount>[\d.,]+)$",
+            line.strip(),
+        )
+        if item_match:
+            item_key = item_match.group(0)
+            if item_key in seen_items:
+                continue
+            seen_items.add(item_key)
+            items.append(
+                {
+                    "descripcion": item_match.group("description"),
+                    "cantidad": parse_quantity(item_match.group("quantity")),
+                    "precio_unitario": parse_ar_money(item_match.group("unit")),
+                    "importe": parse_ar_money(item_match.group("amount")),
+                }
+            )
+
+    parsed = {
+        "tipo_comprobante": f"Factura {letter}",
+        "codigo_comprobante": int(code.group(1)),
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_ar_date(issue_date.group(1)),
+        "emisor": {
+            "nombre": emitter_name,
+            "cuit": emitter_cuit,
+            "doc_tipo": 80,
+            "doc_nro": digits(emitter_cuit),
+            "condicion_iva": emitter_tax,
+        },
+        "receptor": {
+            "nombre": receiver.group("name").strip(),
+            "cuit": receiver.group("cuit"),
+            "doc_tipo": 80,
+            "doc_nro": digits(receiver.group("cuit")),
+            "condicion_iva": receiver_tax,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": 0.0,
+        "tributos_total": tributos_total,
+        "impuestos": tributos_total,
+        "total": total,
+        "cae": cae.group(1),
+        "fecha_vencimiento_cae": parse_ar_date(due_date.group(1)),
+        "iva": [],
+        "tributos": [],
+        "items": items,
+    }
+    return normalize_invoice_json(parsed)
+
+
 def parse_structured_arca_ocr(ocr_text):
     lines = [line.strip() for line in ocr_text.splitlines() if line.strip()]
     if not lines:
         return None
 
     text = "\n".join(lines)
-    header = re.search(r"FACTURA\s+([ABC])", text, flags=re.IGNORECASE)
-    code = re.search(r"Cod\.\s*(\d+)", text)
+    header = re.search(r"(?:\bFACTURA\s+([ABC])\b)|(?:\b([ABC])\s*\nFACTURA\b)", text, flags=re.IGNORECASE)
+    code = re.search(r"Cod\.\s*(\d+)", text, flags=re.IGNORECASE)
     numbers = re.search(r"Punto de Venta:\s*(\d+)\s+Comp\.\s*Nro:\s*(\d+)", text)
-    issue_date = re.search(r"Fecha de Emision:\s*(\d{2}/\d{2}/\d{4})", text)
-    cae = re.search(r"CAE:\s*(\d{14})", text)
-    due_date = re.search(r"Vto\.\s*CAE:\s*(\d{2}/\d{2}/\d{4})", text)
+    issue_date = re.search(r"Fecha de Emisi[oó]n:\s*(\d{2}/\d{2}/\d{4})", text)
+    cae = re.search(r"CAE(?:\s*N[°º])?:\s*(\d{14})", text, flags=re.IGNORECASE)
+    due_date = re.search(r"(?:Vto\.\s*CAE|Fecha de Vto\. de CAE):\s*(\d{2}/\d{2}/\d{4})", text)
     if not (header and code and numbers and issue_date and cae and due_date):
         return None
+
+    letter = (header.group(1) or header.group(2)).upper()
+    real_arca = parse_real_arca_ocr(text, letter, code, numbers, issue_date, cae, due_date)
+    if real_arca is not None:
+        return real_arca
 
     try:
         emitter_cuit_index = next(index for index, line in enumerate(lines) if line.startswith("CUIT: "))
@@ -235,8 +343,6 @@ def parse_structured_arca_ocr(ocr_text):
 
     iva_total = round_money(sum(item["importe"] for item in iva))
     tributos_total = round_money(sum(item["importe"] for item in tributos))
-    letter = header.group(1).upper()
-
     parsed = {
         "tipo_comprobante": f"Factura {letter}",
         "codigo_comprobante": int(code.group(1)),
@@ -289,6 +395,7 @@ def normalize_invoice_json(parsed):
         person = dict(person)
         cuit_digits = digits(person.get("cuit"))
         if cuit_digits and len(cuit_digits) == 11:
+            person["cuit"] = format_cuit(cuit_digits)
             person["doc_nro"] = cuit_digits
         normalized[person_key] = person
 
