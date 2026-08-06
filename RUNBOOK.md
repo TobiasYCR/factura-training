@@ -120,7 +120,36 @@ Por defecto primero intenta resolver con parsers deterministicos para ARCA, GoDa
 curl -X POST "http://127.0.0.1:8000/extract?use_model=true&model=lora" -F "file=@factura.pdf"
 ```
 
-Si el PDF es una imagen escaneada sin texto embebido, este endpoint todavia no hace OCR visual real: en ese caso hay que conectar Tesseract, PaddleOCR, EasyOCR u otro motor OCR antes de pasarle el texto a Qwen.
+### OCR local para PDFs escaneados
+
+El endpoint no usa servicios externos pagos. Primero intenta leer texto embebido del PDF. Si el PDF es escaneado o se fuerza OCR, renderiza las paginas y usa Tesseract local.
+
+En Ubuntu/WSL:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng poppler-utils
+```
+
+En Windows conviene instalar Tesseract y dejar `tesseract.exe` en el `PATH`, o definir:
+
+```powershell
+$env:TESSERACT_CMD="C:\Program Files\Tesseract-OCR\tesseract.exe"
+```
+
+Forzar OCR aunque el PDF tenga texto embebido:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true&ocr_lang=spa+eng&ocr_dpi=220" -F "file=@factura-escaneada.pdf"
+```
+
+Tambien acepta imagenes:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/extract?ocr_lang=spa+eng" -F "file=@factura.jpg"
+```
+
+El `GET /health` informa si Tesseract esta disponible y que comando detecto.
 
 ## Generar facturas sinteticas
 

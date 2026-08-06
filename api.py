@@ -18,9 +18,11 @@ from infer import (
     parse_supported_document_ocr,
     validate_extracted_document_json,
 )
+from ocr import DEFAULT_OCR_DPI, DEFAULT_OCR_LANG, OcrUnavailableError, get_ocr_status, ocr_image_bytes, ocr_pdf_bytes
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MODEL_CACHE = {}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 
 
 def json_response(handler, status, payload):
@@ -38,7 +40,7 @@ def json_response(handler, status, payload):
 def parse_bool(value, default=False):
     if value is None:
         return default
-    return str(value).strip().lower() in {"1", "true", "yes", "si", "sí", "on"}
+    return str(value).strip().lower() in {"1", "true", "yes", "si", "on"}
 
 
 def parse_int(value, default):
@@ -48,7 +50,9 @@ def parse_int(value, default):
         return default
 
 
-def extract_pdf_text(pdf_bytes):
+def extract_embedded_pdf_text(pdf_bytes):
+    errors = []
+
     try:
         import pdfplumber
 
@@ -56,22 +60,38 @@ def extract_pdf_text(pdf_bytes):
             pages = [page.extract_text() or "" for page in pdf.pages]
         text = "\n".join(page for page in pages if page.strip()).strip()
         if text:
-            return text, "pdfplumber"
-    except Exception:
-        pass
+            return text, {"method": "embedded_text", "engine": "pdfplumber", "errors": []}
+    except Exception as error:
+        errors.append(f"pdfplumber: {error}")
 
     try:
         from pypdf import PdfReader
-
         reader = PdfReader(io.BytesIO(pdf_bytes))
         pages = [page.extract_text() or "" for page in reader.pages]
         text = "\n".join(page for page in pages if page.strip()).strip()
         if text:
-            return text, "pypdf"
-    except Exception:
-        pass
+            return text, {"method": "embedded_text", "engine": "pypdf", "errors": errors}
+    except Exception as error:
+        errors.append(f"pypdf: {error}")
 
-    return "", None
+    return "", {"method": "embedded_text", "engine": None, "errors": errors}
+
+
+def extract_upload_text(file_bytes, filename, force_ocr=False, ocr_lang=DEFAULT_OCR_LANG, ocr_dpi=DEFAULT_OCR_DPI):
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".pdf":
+        if not force_ocr:
+            text, meta = extract_embedded_pdf_text(file_bytes)
+            if text:
+                return text, meta
+        text, ocr_meta = ocr_pdf_bytes(file_bytes, lang=ocr_lang, dpi=ocr_dpi)
+        return text, {"method": "ocr", **ocr_meta}
+
+    if suffix in IMAGE_EXTENSIONS:
+        text, ocr_meta = ocr_image_bytes(file_bytes, lang=ocr_lang)
+        return text, {"method": "ocr", **ocr_meta}
+
+    raise ValueError("Por ahora el endpoint acepta PDF o imagenes png/jpg/tiff/bmp/webp.")
 
 
 def parse_multipart_form(body, content_type):
@@ -174,6 +194,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "factura-training-api",
+                    "ocr": get_ocr_status(),
                     "endpoints": ["GET /health", "POST /extract"],
                 },
             )
@@ -202,6 +223,20 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             json_response(self, HTTPStatus.OK if result["ok"] else HTTPStatus.UNPROCESSABLE_ENTITY, result)
         except ValueError as error:
             json_response(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(error)})
+        except OcrUnavailableError as error:
+            json_response(
+                self,
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {
+                    "ok": False,
+                    "error": str(error),
+                    "ocr": get_ocr_status(),
+                    "install_hint": (
+                        "Instala Tesseract localmente. En Ubuntu/WSL: "
+                        "sudo apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng"
+                    ),
+                },
+            )
         except Exception as error:
             json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(error)})
 
@@ -230,7 +265,10 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             raise ValueError("model debe ser 'base' o 'lora'.")
 
         use_model = parse_bool(get_first(fields, query, "use_model", False), default=False)
+        force_ocr = parse_bool(get_first(fields, query, "force_ocr", False), default=False)
         max_new_tokens = parse_int(get_first(fields, query, "max_new_tokens", 900), 900)
+        ocr_lang = str(get_first(fields, query, "ocr_lang", DEFAULT_OCR_LANG) or DEFAULT_OCR_LANG)
+        ocr_dpi = parse_int(get_first(fields, query, "ocr_dpi", DEFAULT_OCR_DPI), DEFAULT_OCR_DPI)
         ocr_text = get_first(fields, query, "ocr_text", "")
         filename = None
         text_extractor = None
@@ -238,14 +276,15 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
         uploaded = files.get("file") or files.get("pdf")
         if uploaded:
             filename = uploaded["filename"]
-            suffix = Path(filename).suffix.lower()
-            if suffix != ".pdf":
-                raise ValueError("Por ahora el endpoint acepta archivos PDF.")
-            ocr_text, text_extractor = extract_pdf_text(uploaded["content"])
+            ocr_text, text_extractor = extract_upload_text(
+                uploaded["content"],
+                filename,
+                force_ocr=force_ocr,
+                ocr_lang=ocr_lang,
+                ocr_dpi=ocr_dpi,
+            )
             if not ocr_text:
-                raise ValueError(
-                    "No se pudo extraer texto del PDF. Si es escaneado como imagen, falta conectar OCR real."
-                )
+                raise ValueError("No se pudo extraer texto del archivo.")
 
         if not str(ocr_text).strip():
             raise ValueError("Envia un PDF en el campo 'file' o texto OCR en 'ocr_text'.")
