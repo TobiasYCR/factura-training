@@ -86,6 +86,42 @@ Si el modelo genera campos fuera del esquema o JSON roto, no es un problema de C
 python evaluate.py --model both --eval-file data/eval.jsonl
 ```
 
+## Levantar endpoint local
+
+El endpoint local permite subir un PDF y devolver el JSON normalizado usando el mismo parser de `infer.py`.
+
+```bash
+python api.py --host 127.0.0.1 --port 8000
+```
+
+Healthcheck:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Extraer desde PDF:
+
+```bash
+curl -X POST http://127.0.0.1:8000/extract -F "file=@factura.pdf"
+```
+
+Extraer desde texto OCR:
+
+```bash
+curl -X POST http://127.0.0.1:8000/extract \
+  -H "Content-Type: application/json" \
+  -d "{\"ocr_text\":\"Factura A ...\"}"
+```
+
+Por defecto primero intenta resolver con parsers deterministicos para ARCA, GoDaddy y Teamwork/Wise. Si el documento no se reconoce y se quiere usar Qwen/LoRA como fallback:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/extract?use_model=true&model=lora" -F "file=@factura.pdf"
+```
+
+Si el PDF es una imagen escaneada sin texto embebido, este endpoint todavia no hace OCR visual real: en ese caso hay que conectar Tesseract, PaddleOCR, EasyOCR u otro motor OCR antes de pasarle el texto a Qwen.
+
 ## Generar facturas sinteticas
 
 ```bash

@@ -4,3 +4,4 @@ data/synthetic_invoices/*_preview-*.png
 data/synthetic_eval*/
 data/real_invoices_analysis/
 __pycache__/
+api-server.*.log
