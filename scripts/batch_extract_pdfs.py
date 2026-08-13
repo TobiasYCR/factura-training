@@ -67,8 +67,9 @@ def process_file(path, args):
             output_text.write_text(text, encoding="utf-8")
             result["ocr_text_file"] = str(output_text)
 
+        parser_text = f"Archivo: {path.name}\n{text}"
         extracted = extract_document(
-            text,
+            parser_text,
             use_model=args.use_model,
             model_choice=args.model,
             max_new_tokens=args.max_new_tokens,

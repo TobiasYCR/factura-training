@@ -823,7 +823,11 @@ def parse_arca_summary_ocr(text, letter, code, numbers, issue_date, cae, due_dat
 
 def parse_loose_arca_cae_ocr(text):
     upper_text = text.upper()
-    if "CAE" not in upper_text and not re.search(r"\d{11}01\d{4}\d{14}\d{8}", text):
+    if (
+        "CAE" not in upper_text
+        and not re.search(r"\d{11}01\d{4}\d{14}\d{8}", text)
+        and not re.search(r"(?:FACTURA|N\S*\s*:?\s*\d{4,5}-\d{7,9}|\d{10,11}_\d{3}_\d{4,5}_\d{7,9})", text, re.IGNORECASE)
+    ):
         return None
 
     header = (
@@ -831,6 +835,11 @@ def parse_loose_arca_cae_ocr(text):
         or re.search(r"Factura:\s*(\d{4,5})-(\d{8})", text, re.IGNORECASE)
     )
     numbers = re.search(r"Punto de Venta:\s*(\d+)\s+Comp\.?\s*Nro:\s*(\d+)", text, re.IGNORECASE)
+    invoice_no_header = re.search(
+        r"\b([ABC])\W{0,30}(?:C\S*d\.?\s*0?1\W{0,80})?N\S*\s*:?\s*(\d{4,5})-(\d{7,9})",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
     visual_header = re.search(
         r"(?:FACTURA\s+([ABC])|\b([ABC])\b.{0,80}?FACTURA).{0,160}?N\S*\s*:?\s*(\d{4,5})-(\d{7,9})",
         text,
@@ -841,6 +850,8 @@ def parse_loose_arca_cae_ocr(text):
         text,
         re.IGNORECASE | re.DOTALL,
     )
+    bare_number = re.search(r"N\S*\s*:?\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+    filename_number = re.search(r"\b\d{10,11}_\d{3}_(\d{4,5})_(\d{7,9})\b", text)
     if header and len(header.groups()) == 3:
         letter = header.group(1).upper()
         point_of_sale = header.group(2).zfill(5)
@@ -849,6 +860,10 @@ def parse_loose_arca_cae_ocr(text):
         letter = "A"
         point_of_sale = header.group(1).zfill(5)
         receipt_number = header.group(2).zfill(8)
+    elif invoice_no_header:
+        letter = invoice_no_header.group(1).upper()
+        point_of_sale = invoice_no_header.group(2).zfill(5)
+        receipt_number = invoice_no_header.group(3).zfill(8)
     elif visual_header:
         letter = (visual_header.group(1) or visual_header.group(2) or "A").upper()
         point_of_sale = visual_header.group(3).zfill(5)
@@ -857,12 +872,22 @@ def parse_loose_arca_cae_ocr(text):
         letter = "A"
         point_of_sale = visual_no_letter.group(1).zfill(5)
         receipt_number = visual_no_letter.group(2).zfill(8)
+    elif bare_number and re.search(r"\bA\b|C\S*d\.?\s*0?1|IVA\s+(?:Responsable\s+)?Inscripto", text, re.IGNORECASE):
+        letter = "A"
+        point_of_sale = bare_number.group(1).zfill(5)
+        receipt_number = bare_number.group(2).zfill(8)
+    elif filename_number and re.search(r"FACTURA\s+A|\bA\b|IVA\s+(?:Responsable\s+)?Inscripto|RESPONSABLE INSCRIPTO", text, re.IGNORECASE):
+        letter = "A"
+        point_of_sale = filename_number.group(1).zfill(5)
+        receipt_number = filename_number.group(2).zfill(8)
     elif numbers:
         letter = "A" if re.search(r"IVA\s+(?:Responsable\s+)?Inscripto|IVA\s+10\.?5%|IVA\s+21%", text, re.IGNORECASE) else "C"
         point_of_sale = numbers.group(1).zfill(5)
         receipt_number = numbers.group(2).zfill(8)
     else:
         return None
+    if len(receipt_number) > 8 and receipt_number.startswith("0"):
+        receipt_number = receipt_number[-8:]
 
     barcode = re.search(r"(\d{11})01(\d{4})(\d{14})(\d{8})", text)
     cae = barcode.group(3) if barcode else first_match(r"CAE\S*:\s*(\d{13,14})", text, re.IGNORECASE)
@@ -888,12 +913,12 @@ def parse_loose_arca_cae_ocr(text):
         or first_match(r"Fecha\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
         or first_match(r"FACTURA.{0,220}?(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE | re.DOTALL)
     )
-    if not issue_value:
-        return None
 
     cuit_matches = re.findall(r"(?:CUIT|C\.U\.I\.T|CUIL/CUIT)\s*:?\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
     provider_cuit = cuit_matches[0] if cuit_matches else None
     receiver_cuit = cuit_matches[1] if len(cuit_matches) > 1 else None
+    if provider_cuit is None:
+        provider_cuit = first_match(r"Archivo:.*?(\d{11})_\d{3}_", text, re.IGNORECASE)
 
     if "E-BUYPLACE" in upper_text:
         provider_name = "E-BUYPLACE S.A."
@@ -933,6 +958,14 @@ def parse_loose_arca_cae_ocr(text):
         if subtotal_values:
             subtotal = subtotal_values[-1]
 
+    summary_row = re.search(
+        r"SUBTOTAL\s+BONIFICACION.*?TOTAL\s+([\d.,]+)\s+([\d.,]+)\s+([\d.,]+)\s+IVA\s*21[,.]00\s+([\d.,]+)\s+([\d.,]+)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if summary_row:
+        subtotal = parse_money(summary_row.group(3))
+
     iva_total = 0.0
     for amount in re.findall(r"IVA(?:\s+Inscripto)?\s*(?:10[,.]50|10[,.]5|21(?:[,.]00)?)?\s*%?\s*\$?\s*([\d.,]+)", text, re.IGNORECASE):
         value = parse_money(amount)
@@ -948,6 +981,8 @@ def parse_loose_arca_cae_ocr(text):
             value = parse_money(amount)
             if value and value > iva_total:
                 iva_total = value
+    if summary_row:
+        iva_total = parse_money(summary_row.group(4)) or iva_total
     if iva_total == 0:
         iva_total = parse_money(first_match(r"IVA\s+21\.00\s*%\s*([\d.,]+)", text, re.IGNORECASE) or 0)
 
@@ -956,11 +991,14 @@ def parse_loose_arca_cae_ocr(text):
         tributos_total = round_money(tributos_total + (parse_money(amount) or 0))
 
     total = (
-        parse_money(first_match(r"Importe Total:\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+        (parse_money(summary_row.group(5)) if summary_row else None)
+        or parse_money(first_match(r"Importe Total:\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
         or parse_money(first_match(r"^[ \t]*TOTAL[ \t]*:?[ \t]*\$?[ \t]*([\d.,]+)", text, re.IGNORECASE | re.MULTILINE))
         or parse_money(first_match(r"(?<!SUB)\bTOTAL[ \t]*:?[ \t]*\$?[ \t]*([\d.,]+)", text, re.IGNORECASE))
         or parse_money(first_match(r"Total\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
     )
+    if (not iva_total) and subtotal is not None and total is not None and (not tributos_total):
+        iva_total = round_money(total - subtotal)
     if total is None:
         known_amounts = [amount for amount in (subtotal, iva_total, tributos_total) if amount]
         if subtotal is not None and len(known_amounts) > 1:
