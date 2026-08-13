@@ -1,4 +1,5 @@
 import argparse
+import inspect
 from pathlib import Path
 
 from unsloth import FastLanguageModel, is_bfloat16_supported
@@ -8,6 +9,7 @@ from trl import SFTConfig, SFTTrainer
 
 DEFAULT_DATA_FILES = [
     "data/train.jsonl",
+    "data/real_train.jsonl",
     "data/synthetic_invoices/synthetic_train.jsonl",
 ]
 DEFAULT_MAX_SEQ_LENGTH = 2048
@@ -84,8 +86,9 @@ def main():
     )
 
     def format_example(example):
+        instruction = example.get("instruction") or strict_instruction
         text = f"""### Instruccion:
-{strict_instruction}
+{instruction}
 
 ### Texto OCR:
 {example["input"]}
@@ -96,29 +99,36 @@ def main():
 
     dataset = dataset.map(format_example)
 
-    trainer = SFTTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataset=dataset,
-        args=SFTConfig(
-            dataset_text_field="text",
-            max_length=args.max_seq_length,
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=4,
-            warmup_steps=5,
-            max_steps=args.max_steps,
-            learning_rate=2e-4,
-            logging_steps=1,
-            optim="adamw_8bit",
-            weight_decay=0.01,
-            lr_scheduler_type="linear",
-            seed=3407,
-            output_dir="outputs",
-            report_to="none",
-            fp16=not is_bfloat16_supported(),
-            bf16=is_bfloat16_supported(),
-        ),
+    trainer_args = SFTConfig(
+        dataset_text_field="text",
+        max_length=args.max_seq_length,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=4,
+        warmup_steps=5,
+        max_steps=args.max_steps,
+        learning_rate=2e-4,
+        logging_steps=1,
+        optim="adamw_8bit",
+        weight_decay=0.01,
+        lr_scheduler_type="linear",
+        seed=3407,
+        output_dir="outputs",
+        report_to="none",
+        fp16=not is_bfloat16_supported(),
+        bf16=is_bfloat16_supported(),
     )
+    trainer_kwargs = {
+        "model": model,
+        "train_dataset": dataset,
+        "args": trainer_args,
+    }
+    trainer_params = inspect.signature(SFTTrainer.__init__).parameters
+    if "processing_class" in trainer_params:
+        trainer_kwargs["processing_class"] = tokenizer
+    elif "tokenizer" in trainer_params:
+        trainer_kwargs["tokenizer"] = tokenizer
+
+    trainer = SFTTrainer(**trainer_kwargs)
 
     trainer.train()
 

@@ -218,3 +218,39 @@ Para que la medición tenga sentido, conviene separar:
 ## Próximo paso recomendado
 
 El dataset ya fue adaptado a `docs/arca-schema.md` y `schemas/arca_invoice_schema.json`. El proximo salto es agregar 30-100 facturas reales anonimizadas de ARCA/OCR, manteniendo ese mismo esquema. Con pocos ejemplos el LoRA puede memorizar formato, pero todavia no demuestra generalizacion.
+
+## Dataset real desde PDFs procesados
+
+Cuando el batch termina OK y quedan generados los `.txt` y `.json` en
+`data/real_invoices_analysis`, se puede construir un dataset real para fine-tuning:
+
+```bash
+python scripts/build_real_dataset.py
+```
+
+Salida:
+
+- `data/real_train.jsonl`: ejemplos reales para entrenamiento.
+- `data/real_eval.jsonl`: ejemplos reales reservados para evaluacion.
+
+El script mezcla facturas ARCA y comprobantes externos usando una instruccion por ejemplo,
+asi el modelo no recibe una consigna ARCA cuando el output esperado es GoDaddy,
+Teamwork/Wise u otro documento externo.
+
+`train.py` usa automaticamente estos archivos si existen:
+
+- `data/train.jsonl`
+- `data/real_train.jsonl`
+- `data/synthetic_invoices/synthetic_train.jsonl`
+
+Para entrenar despues de construir el dataset real:
+
+```bash
+python train.py
+```
+
+Para una prueba corta:
+
+```bash
+python train.py --max-steps 40
+```

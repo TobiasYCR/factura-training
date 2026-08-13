@@ -3,5 +3,7 @@ data/synthetic_invoices/ocr/
 data/synthetic_invoices/*_preview-*.png
 data/synthetic_eval*/
 data/real_invoices_analysis/
+data/real_train.jsonl
+data/real_eval.jsonl
 __pycache__/
 api-server.*.log
