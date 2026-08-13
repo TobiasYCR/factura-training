@@ -164,7 +164,7 @@ def parse_ar_date(value):
 
 def parse_document_date(value):
     value = str(value).strip()
-    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%b %d %Y", "%B %d %Y"):
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%d.%m.%Y", "%d.%m.%y", "%d-%m-%Y", "%d-%m-%y", "%b %d %Y", "%B %d %Y"):
         try:
             return datetime.strptime(value, fmt).date().isoformat()
         except ValueError:
@@ -379,7 +379,126 @@ def parse_teamwork_invoice_ocr(ocr_text):
     )
 
 
-def parse_real_arca_ocr(text, letter, code, numbers, issue_date, cae, due_date):
+def parse_generic_external_invoice_ocr(ocr_text):
+    text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
+    upper_text = text.upper()
+    if not any(marker in upper_text for marker in ("FACTURA", "INVOICE", "RECIBO")):
+        return None
+    if "CAE" in upper_text and "PUNTO DE VENTA" in upper_text:
+        return None
+
+    invoice_no = re.search(r"INVOICE\s+NO\.\s*(?P<prefix>[0-9-]+)\s*(?P<number>\d+)", text, re.IGNORECASE)
+    number = (
+        first_match(r"N[uú]mero de factura:\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+        or first_match(r"N[º°]\s*factura\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+        or first_match(r"FACTURA\s+N\.\S*\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+        or first_match(r"N[uú]mero:\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+        or first_match(r"\b([A-Z]\d{3}-\d+)\b", text)
+    )
+    if invoice_no:
+        number = f"{invoice_no.group('prefix')}{invoice_no.group('number')}"
+
+    date = (
+        first_match(r"Fecha de factura:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+        or first_match(r"DATE:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+        or first_match(r"FECHA:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+        or first_match(r"Fecha:?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})", text, re.IGNORECASE)
+        or first_match(r"Fecha de Emisi[oó]n\s*:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    )
+    total_text = (
+        first_match(r"TOTAL(?:\s+FACTURA)?\s*:?\s*(?:USD|EUR|ARS)?\s*\$?\s*([\d.,]+)\s*(?:\$|€)?", text, re.IGNORECASE)
+        or first_match(r"Balance Due\s+\$?\s*([\d.,]+)", text, re.IGNORECASE)
+        or first_match(r"Importe Total\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE)
+    )
+    total = parse_money(total_text) if total_text else None
+    if not (number and date and total is not None):
+        return None
+
+    subtotal_text = (
+        first_match(r"SUBTOTAL\s*:?\s*(?:USD|EUR|ARS)?\s*\$?\s*([\d.,]+)", text, re.IGNORECASE)
+        or first_match(r"Subtotal\s+([\d.,]+)", text, re.IGNORECASE)
+        or first_match(r"Sub Total Ventas\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE)
+    )
+    taxes_text = (
+        first_match(r"(?:IVA|TOTAL TAX|IGV)\s*:?\s*(?:USD|EUR|ARS)?\s*\$?\s*([\d.,]+)", text, re.IGNORECASE)
+        or first_match(r"I\.V\.A\.\s*[\d.,]+%\s+([\d.,]+)", text, re.IGNORECASE)
+    )
+
+    currency = None
+    if re.search(r"\bUSD\b|DOLAR", upper_text):
+        currency = "USD"
+    elif re.search(r"\bEUR\b|€", upper_text):
+        currency = "EUR"
+    elif re.search(r"\bARS\b|PESOS", upper_text):
+        currency = "ARS"
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    provider_name = None
+    if lines:
+        if lines[0].upper().startswith("LA FACTURA") and len(lines) > 1:
+            provider_name = lines[1]
+        elif lines[0].upper().startswith("FACTURA ") and len(lines[0].split()) > 1:
+            provider_name = lines[0].split(" ", 1)[1]
+        elif lines[0].upper().startswith("FACTURA") and len(lines) > 1:
+            provider_name = lines[1]
+
+    buyer_name = (
+        first_match(r"Facturar a:\s*(?:Nombre del cliente:\s*)?([^\n]+)", text, re.IGNORECASE | re.DOTALL)
+        or first_match(r"BILL TO\s+SHIP TO\s+([^\n]+)", text, re.IGNORECASE)
+        or first_match(r"PARA:\s*(?:Nombre de la compa\S+:\s*)?([^\n]+)", text, re.IGNORECASE | re.DOTALL)
+        or first_match(r"Cliente:\s*([^\n]+)", text, re.IGNORECASE)
+        or first_match(r"Se\S+\(es\)\s*:\s*([^\n]+)", text, re.IGNORECASE)
+    )
+
+    return normalize_external_document(
+        {
+            "document_type": "external_provider_invoice",
+            "provider": {
+                "name": provider_name,
+                "business_name": provider_name,
+                "tax_id": None,
+                "vat_number": first_match(r"\b(?:NIF/CIF|N\.I\.F\.|RUC):\s*([A-Z0-9-]+)", text, re.IGNORECASE),
+                "address": None,
+                "country": None,
+                "phone": first_match(r"Tel[eé]fono:\s*([^\n]+)", text, re.IGNORECASE),
+            },
+            "buyer": {
+                "name": buyer_name,
+                "business_name": buyer_name,
+                "tax_id": first_match(r"\b(?:RUC|CUIT|N\.I\.F\.):\s*([0-9-]+)", text, re.IGNORECASE),
+                "vat_number": None,
+                "address": first_match(r"(?:Domicilio|Direcci[oó]n)\s*:?\s*([^\n]+)", text, re.IGNORECASE),
+                "country": None,
+                "phone": None,
+            },
+            "document": {
+                "title": "FACTURA" if "FACTURA" in upper_text else "INVOICE",
+                "number": number,
+                "date": parse_document_date(date),
+                "account_number": None,
+                "customer_number": first_match(r"N[uú]mero de cliente:\s*(\d+)", text, re.IGNORECASE),
+                "status": None,
+            },
+            "currency": currency,
+            "subtotal": parse_money(subtotal_text) if subtotal_text else None,
+            "taxes": parse_money(taxes_text) if taxes_text else None,
+            "fees": 0.0,
+            "total": total,
+            "paid": None,
+            "balance_due": total,
+            "payment": {
+                "method": None,
+                "card_brand": None,
+                "card_last4": None,
+                "amount": None,
+            },
+            "items": [],
+            "notes": "Generic external invoice parsed from observed PDF text. Not an ARCA invoice.",
+        }
+    )
+
+
+def parse_real_arca_ocr(text, letter, code, numbers, issue_date, cae, due_date, document_kind="Factura"):
     if "Apellido y Nombre / Raz" not in text:
         return None
 
@@ -390,7 +509,7 @@ def parse_real_arca_ocr(text, letter, code, numbers, issue_date, cae, due_date):
         r"\nCUIT:\s*(?P<cuit>\d{11}|\d{2}-\d{8}-\d)\s+Apellido y Nombre / Raz[oó]n Social:\s*(?P<name>.*?)(?:\n|$)",
         text,
     )
-    if not (emitter_name and emitter_cuit and emitter_tax and receiver):
+    if not (emitter_name and emitter_cuit and receiver):
         return None
 
     receiver_tax = None
@@ -426,7 +545,7 @@ def parse_real_arca_ocr(text, letter, code, numbers, issue_date, cae, due_date):
             )
 
     parsed = {
-        "tipo_comprobante": f"Factura {letter}",
+        "tipo_comprobante": f"{document_kind} {letter}",
         "codigo_comprobante": int(code.group(1)),
         "punto_venta": point_of_sale,
         "numero_comprobante": receipt_number,
@@ -464,25 +583,195 @@ def parse_real_arca_ocr(text, letter, code, numbers, issue_date, cae, due_date):
     return normalize_invoice_json(parsed)
 
 
+def parse_arca_summary_ocr(text, letter, code, numbers, issue_date, cae, due_date, document_kind="Factura"):
+    cuit_matches = re.findall(r"CUIT:\s*(\d{11}|\d{2}-\d{8}-\d)", text)
+    receiver = re.search(
+        r"CUIT:\s*(?P<cuit>\d{11}|\d{2}-\d{8}-\d)\s+Apellido y Nombre / Raz[oóÃ³]n Social:\s*(?P<name>.*?)(?:\n|$)",
+        text,
+    )
+    emitter_name = first_match(r"Raz[oóÃ³]n Social:\s*([^\n]+)", text)
+    if not (emitter_name and cuit_matches and receiver):
+        return None
+
+    point_of_sale = numbers.group(1).zfill(5)
+    receipt_number = numbers.group(2).zfill(8)
+    subtotal = parse_ar_money(first_match(r"Subtotal:\s*\$\s*([\d.,]+)", text) or 0)
+    net = parse_ar_money(first_match(r"Importe Neto Gravado:\s*\$\s*([\d.,]+)", text) or subtotal)
+    tributos_total = parse_ar_money(first_match(r"Importe Otros Tributos:\s*\$\s*([\d.,]+)", text) or 0)
+    total = parse_ar_money(first_match(r"Importe Total:\s*\$\s*([\d.,]+)", text) or subtotal or net)
+
+    iva = []
+    for rate_text, amount_text in re.findall(r"IVA\s+(\d+(?:[,.]\d+)?)%:\s*\$\s*([\d.,]+)", text):
+        rate = parse_money(rate_text)
+        amount = parse_ar_money(amount_text)
+        if amount and amount > 0:
+            iva.append(
+                {
+                    "codigo": IVA_CODE_BY_RATE.get(rate),
+                    "descripcion": f"{rate:g}%",
+                    "base_imponible": net if net else None,
+                    "importe": amount,
+                }
+            )
+    iva_total = round_money(sum(item["importe"] for item in iva))
+
+    concept = first_match(r"en concepto de:\s*(.*?)\s+Subtotal:", text, re.DOTALL)
+    items = []
+    if concept:
+        items.append(
+            {
+                "descripcion": re.sub(r"\s+", " ", concept).strip(),
+                "cantidad": 1,
+                "precio_unitario": subtotal,
+                "importe": subtotal,
+            }
+        )
+
+    parsed = {
+        "tipo_comprobante": f"{document_kind} {letter}",
+        "codigo_comprobante": int(code.group(1)),
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_ar_date(issue_date.group(1)),
+        "emisor": {
+            "nombre": emitter_name,
+            "cuit": cuit_matches[0],
+            "doc_tipo": 80,
+            "doc_nro": digits(cuit_matches[0]),
+            "condicion_iva": first_match(r"Condici[oóÃ³]n\s+fren\s*te\s+al IVA:\s*([^\n]+)", text),
+        },
+        "receptor": {
+            "nombre": receiver.group("name").strip(),
+            "cuit": receiver.group("cuit"),
+            "doc_tipo": 80,
+            "doc_nro": digits(receiver.group("cuit")),
+            "condicion_iva": None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal or net,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_total,
+        "tributos_total": tributos_total,
+        "impuestos": round_money(iva_total + tributos_total),
+        "total": total,
+        "cae": cae.group(1),
+        "fecha_vencimiento_cae": parse_ar_date(due_date.group(1)),
+        "iva": iva,
+        "tributos": [],
+        "items": items,
+    }
+    return normalize_invoice_json(parsed)
+
+
+def parse_compact_arca_ocr(text):
+    header = re.search(r"\b([ABC])\s+Factura\s+(\d{4})(\d{8})\b", text, re.IGNORECASE)
+    code = first_match(r"C[oóÃ³]digo:\s*(\d+)", text, re.IGNORECASE)
+    issue_date = first_match(r"Buenos Aires,\s*(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
+    cae = first_match(r"C\.A\.E\.:\s*(\d{14})", text, re.IGNORECASE)
+    due_date = first_match(r"Vto\.\s*C\.A\.E\.:\s*(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
+    emitter_cuit = first_match(r"C\.U\.I\.T\.\s*(\d{2}-\d{8}-\d)", text, re.IGNORECASE)
+    receiver = re.search(r"Sr/es:\s*(?P<name>[^\n]+).*?\bCUIT:\s*(?P<cuit>\d{2}-\d{8}-\d)", text, re.DOTALL | re.IGNORECASE)
+    totals = re.search(
+        r"Subtotal\s+Desc\.\S*\s+Subtotal\s+IVA\s+10\.5\s+IVA\s+21.*?\n(?P<values>.+)",
+        text,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not (header and code and issue_date and cae and due_date and emitter_cuit and receiver and totals):
+        return None
+
+    amounts = re.findall(r"\$\s*([\d,]+\.\d{2})", totals.group("values"))
+    if len(amounts) < 8:
+        return None
+
+    subtotal = parse_money(amounts[2])
+    iva_105 = parse_money(amounts[3])
+    iva_21 = parse_money(amounts[4])
+    tributos_total = round_money((parse_money(amounts[5]) or 0) + (parse_money(amounts[6]) or 0))
+    total = parse_money(amounts[7])
+    point_of_sale = header.group(2).zfill(5)
+    receipt_number = header.group(3).zfill(8)
+    iva = []
+    if iva_105:
+        iva.append({"codigo": 4, "descripcion": "10.5%", "base_imponible": None, "importe": iva_105})
+    if iva_21:
+        iva.append({"codigo": 5, "descripcion": "21%", "base_imponible": None, "importe": iva_21})
+    iva_total = round_money(sum(item["importe"] for item in iva))
+
+    parsed = {
+        "tipo_comprobante": f"Factura {header.group(1).upper()}",
+        "codigo_comprobante": int(code),
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_ar_date(issue_date),
+        "emisor": {
+            "nombre": None,
+            "cuit": emitter_cuit,
+            "doc_tipo": 80,
+            "doc_nro": digits(emitter_cuit),
+            "condicion_iva": "IVA Responsable Inscripto" if "Responsable Inscripto" in text else None,
+        },
+        "receptor": {
+            "nombre": receiver.group("name").strip(),
+            "cuit": receiver.group("cuit"),
+            "doc_tipo": 80,
+            "doc_nro": digits(receiver.group("cuit")),
+            "condicion_iva": "Responsable inscripto" if "Responsable inscripto" in text else None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_total,
+        "tributos_total": tributos_total,
+        "impuestos": round_money(iva_total + tributos_total),
+        "total": total,
+        "cae": cae,
+        "fecha_vencimiento_cae": parse_ar_date(due_date),
+        "iva": iva,
+        "tributos": [],
+        "items": [],
+    }
+    return normalize_invoice_json(parsed)
+
+
 def parse_structured_arca_ocr(ocr_text):
     lines = [line.strip() for line in ocr_text.splitlines() if line.strip()]
     if not lines:
         return None
 
     text = "\n".join(lines)
-    header = re.search(r"(?:\bFACTURA\s+([ABC])\b)|(?:\b([ABC])\s*\nFACTURA\b)", text, flags=re.IGNORECASE)
+    compact_arca = parse_compact_arca_ocr(text)
+    if compact_arca is not None:
+        return compact_arca
+
+    header = re.search(r"(?:\b(FACTURA|RECIBO)\s+([ABC])\b)|(?:\b([ABC])\s*\n(?:.*?\b)?(FACTURA|RECIBO)\b)", text, flags=re.IGNORECASE)
     code = re.search(r"Cod\.\s*(\d+)", text, flags=re.IGNORECASE)
     numbers = re.search(r"Punto de Venta:\s*(\d+)\s+Comp\.\s*Nro:\s*(\d+)", text)
-    issue_date = re.search(r"Fecha de Emisi[oó]n:\s*(\d{2}/\d{2}/\d{4})", text)
+    issue_date = re.search(r"Fecha de Emisi\S*n:\s*(\d{2}/\d{2}/\d{4})", text)
     cae = re.search(r"CAE(?:\s*N[°º])?:\s*(\d{14})", text, flags=re.IGNORECASE)
     due_date = re.search(r"(?:Vto\.\s*CAE|Fecha de Vto\. de CAE):\s*(\d{2}/\d{2}/\d{4})", text)
-    if not (header and code and numbers and issue_date and cae and due_date):
+    if not (code and numbers and issue_date and cae and due_date):
         return None
 
-    letter = (header.group(1) or header.group(2)).upper()
-    real_arca = parse_real_arca_ocr(text, letter, code, numbers, issue_date, cae, due_date)
+    if header:
+        document_kind = (header.group(1) or header.group(4) or "FACTURA").title()
+        letter = (header.group(2) or header.group(3)).upper()
+    else:
+        letter = (first_match(r"(?:^|\n)\s*([ABC])\s*\n", text) or "").upper()
+        if not letter or not re.search(r"\b(FACTURA|RECIBO)\b", text, re.IGNORECASE):
+            return None
+        document_kind = "Recibo" if re.search(r"\bRECIBO\b", text[:250], re.IGNORECASE) else "Factura"
+    real_arca = parse_real_arca_ocr(text, letter, code, numbers, issue_date, cae, due_date, document_kind)
     if real_arca is not None:
         return real_arca
+    summary_arca = parse_arca_summary_ocr(text, letter, code, numbers, issue_date, cae, due_date, document_kind)
+    if summary_arca is not None:
+        return summary_arca
 
     try:
         emitter_cuit_index = next(index for index, line in enumerate(lines) if line.startswith("CUIT: "))
@@ -748,6 +1037,7 @@ def parse_supported_document_ocr(ocr_text):
         parse_godaddy_receipt_ocr(ocr_text)
         or parse_teamwork_invoice_ocr(ocr_text)
         or parse_structured_arca_ocr(ocr_text)
+        or parse_generic_external_invoice_ocr(ocr_text)
     )
 
 

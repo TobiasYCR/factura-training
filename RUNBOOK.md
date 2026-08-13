@@ -151,6 +151,32 @@ curl -X POST "http://127.0.0.1:8000/extract?ocr_lang=spa+eng" -F "file=@factura.
 
 El `GET /health` informa si Tesseract esta disponible y que comando detecto.
 
+## Procesar una carpeta completa
+
+Para probar muchos PDFs juntos:
+
+```bash
+python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF
+```
+
+El resumen queda en:
+
+```text
+data/real_invoices_analysis/batch_summary.jsonl
+```
+
+Ese directorio esta ignorado por Git porque puede contener datos reales. Si queres guardar el JSON de cada PDF:
+
+```bash
+python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF --write-json
+```
+
+En la PC con Tesseract instalado tambien se puede forzar OCR visual:
+
+```bash
+python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF --force-ocr
+```
+
 ## Generar facturas sinteticas
 
 ```bash
