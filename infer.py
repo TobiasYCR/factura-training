@@ -164,6 +164,32 @@ def parse_ar_date(value):
 
 def parse_document_date(value):
     value = str(value).strip()
+    month_aliases = {
+        "jan": "01",
+        "fev": "02",
+        "feb": "02",
+        "mar": "03",
+        "abr": "04",
+        "apr": "04",
+        "mai": "05",
+        "may": "05",
+        "jun": "06",
+        "jul": "07",
+        "ago": "08",
+        "aug": "08",
+        "set": "09",
+        "sep": "09",
+        "out": "10",
+        "oct": "10",
+        "nov": "11",
+        "dez": "12",
+        "dec": "12",
+    }
+    alias_match = re.fullmatch(r"(\d{1,2})\s*-\s*([A-Za-z]{3})\s*-\s*(\d{4})", value)
+    if alias_match:
+        month = month_aliases.get(alias_match.group(2).lower())
+        if month:
+            return f"{alias_match.group(3)}-{month}-{int(alias_match.group(1)):02d}"
     for fmt in ("%d/%m/%Y", "%d/%m/%y", "%d.%m.%Y", "%d.%m.%y", "%d-%m-%Y", "%d-%m-%y", "%b %d %Y", "%B %d %Y"):
         try:
             return datetime.strptime(value, fmt).date().isoformat()
@@ -508,6 +534,11 @@ def parse_generic_external_invoice_ocr(ocr_text):
     )
     if invoice_no:
         number = f"{invoice_no.group('prefix')}{invoice_no.group('number')}"
+    if not number:
+        number = (
+            first_match(r"Invoice Number:\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+            or first_match(r"Factura:\s*(\d{4,5}-\d{8})", text, re.IGNORECASE)
+        )
 
     date = (
         first_match(r"Fecha de factura:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
@@ -516,11 +547,20 @@ def parse_generic_external_invoice_ocr(ocr_text):
         or first_match(r"Fecha:?\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})", text, re.IGNORECASE)
         or first_match(r"Fecha de Emisi[oó]n\s*:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
     )
+    if not date:
+        date = first_match(r"Issue Date:\s*(\d{1,2}\s*-\s*[A-Za-z]{3}\s*-\s*\d{4})", text, re.IGNORECASE)
+
     total_text = (
         first_match(r"TOTAL(?:\s+FACTURA)?\s*:?\s*(?:USD|EUR|ARS)?\s*\$?\s*([\d.,]+)\s*(?:\$|€)?", text, re.IGNORECASE)
         or first_match(r"Balance Due\s+\$?\s*([\d.,]+)", text, re.IGNORECASE)
         or first_match(r"Importe Total\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE)
     )
+    if not total_text:
+        total_text = first_match(
+            r"Total\s+(?:USD|EUR|ARS)\s+[\d.,]+\s+(?:USD|EUR|ARS)\s+([\d.,]+)",
+            text,
+            re.IGNORECASE,
+        )
     total = parse_money(total_text) if total_text else None
     if not (number and date and total is not None):
         return None
@@ -552,6 +592,8 @@ def parse_generic_external_invoice_ocr(ocr_text):
             provider_name = lines[0].split(" ", 1)[1]
         elif lines[0].upper().startswith("FACTURA") and len(lines) > 1:
             provider_name = lines[1]
+    if not provider_name:
+        provider_name = first_match(r"Supplier:\s*(.*?)\s+Customer:", text, re.IGNORECASE)
 
     buyer_name = (
         first_match(r"Facturar a:\s*(?:Nombre del cliente:\s*)?([^\n]+)", text, re.IGNORECASE | re.DOTALL)
@@ -560,6 +602,8 @@ def parse_generic_external_invoice_ocr(ocr_text):
         or first_match(r"Cliente:\s*([^\n]+)", text, re.IGNORECASE)
         or first_match(r"Se\S+\(es\)\s*:\s*([^\n]+)", text, re.IGNORECASE)
     )
+    if not buyer_name:
+        buyer_name = first_match(r"Customer:\s*([^\n]+)", text, re.IGNORECASE)
 
     return normalize_external_document(
         {
@@ -777,6 +821,143 @@ def parse_arca_summary_ocr(text, letter, code, numbers, issue_date, cae, due_dat
     return normalize_invoice_json(parsed)
 
 
+def parse_loose_arca_cae_ocr(text):
+    upper_text = text.upper()
+    if "CAE" not in upper_text and not re.search(r"\d{11}01\d{4}\d{14}\d{8}", text):
+        return None
+
+    header = (
+        re.search(r"Factura\s+([ABC])\s+(\d{4,5})-(\d{8})", text, re.IGNORECASE)
+        or re.search(r"Factura:\s*(\d{4,5})-(\d{8})", text, re.IGNORECASE)
+    )
+    numbers = re.search(r"Punto de Venta:\s*(\d+)\s+Comp\.?\s*Nro:\s*(\d+)", text, re.IGNORECASE)
+    if header and len(header.groups()) == 3:
+        letter = header.group(1).upper()
+        point_of_sale = header.group(2).zfill(5)
+        receipt_number = header.group(3).zfill(8)
+    elif header:
+        letter = "A"
+        point_of_sale = header.group(1).zfill(5)
+        receipt_number = header.group(2).zfill(8)
+    elif numbers:
+        letter = "A" if re.search(r"IVA\s+(?:Responsable\s+)?Inscripto|IVA\s+10\.?5%|IVA\s+21%", text, re.IGNORECASE) else "C"
+        point_of_sale = numbers.group(1).zfill(5)
+        receipt_number = numbers.group(2).zfill(8)
+    else:
+        return None
+
+    barcode = re.search(r"(\d{11})01(\d{4})(\d{14})(\d{8})", text)
+    cae = barcode.group(3) if barcode else first_match(r"CAE\S*:\s*(\d{13,14})", text, re.IGNORECASE)
+    if cae and len(cae) != 14:
+        cae = None
+
+    due_date = None
+    if barcode:
+        due_raw = barcode.group(4)
+        due_date = f"{due_raw[:4]}-{due_raw[4:6]}-{due_raw[6:]}"
+    else:
+        due_value = (
+            first_match(r"Fecha\s+venc\.\s*:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+            or first_match(r"Fecha de Vto\. de CAE:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+            or first_match(r"FECHA DE VENCIMIENTO:\s*(\d{1,2}[./]\d{1,2}[./]\d{4})", text, re.IGNORECASE)
+        )
+        due_date = parse_document_date(due_value) if due_value else None
+
+    issue_value = (
+        first_match(r"FECHA DE EMISION:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+        or first_match(r"Fecha de Emisi\S*n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+        or first_match(r"Fecha de emisi\S*n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    )
+    if not issue_value:
+        return None
+
+    cuit_matches = re.findall(r"(?:CUIT|C\.U\.I\.T|CUIL/CUIT)\s*:?\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
+    provider_cuit = cuit_matches[0] if cuit_matches else None
+    receiver_cuit = cuit_matches[1] if len(cuit_matches) > 1 else None
+
+    if "E-BUYPLACE" in upper_text:
+        provider_name = "E-BUYPLACE S.A."
+    elif "OSDE" in upper_text:
+        provider_name = "OSDE"
+    elif "WEST TECH" in upper_text:
+        provider_name = "WEST TECH INFORMATICA"
+    else:
+        provider_name = first_match(r"Raz[oóÃ³]n Social:\s*([^\n]+)", text)
+
+    receiver_name = (
+        first_match(r"(CS TECH CONSULTING S\.?A\.?)", text, re.IGNORECASE)
+        or first_match(r"(CS TECH CONSULTING SA)", text, re.IGNORECASE)
+    )
+
+    subtotal = (
+        parse_money(first_match(r"Neto Gravado\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+        or parse_money(first_match(r"Importe Neto Gravado:\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+        or parse_money(first_match(r"Por Servicios.*?\s([\d.,]+)\.?\s*IVA", text, re.IGNORECASE | re.DOTALL))
+        or parse_money(first_match(r"Total valor Plan de Servicio\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+    )
+
+    iva_total = 0.0
+    for amount in re.findall(r"IVA(?:\s+Inscripto)?\s*(?:10[,.]50|10[,.]5|21(?:[,.]00)?)?\s*%?\s*\$?\s*([\d.,]+)", text, re.IGNORECASE):
+        value = parse_money(amount)
+        if value:
+            iva_total = round_money(iva_total + value)
+    if iva_total == 0:
+        iva_total = parse_money(first_match(r"IVA\s+21\.00\s*%\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+
+    tributos_total = 0.0
+    for amount in re.findall(r"(?:Percepci[oóÃ³]n|IIBB)[^\n$]*\$\s*([\d.,]+)", text, re.IGNORECASE):
+        tributos_total = round_money(tributos_total + (parse_money(amount) or 0))
+
+    total = (
+        parse_money(first_match(r"Importe Total:\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+        or parse_money(first_match(r"Total\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+    )
+    if total is None:
+        known_amounts = [amount for amount in (subtotal, iva_total, tributos_total) if amount is not None]
+        if subtotal is not None and len(known_amounts) > 1:
+            total = round_money(sum(known_amounts))
+        else:
+            return None
+
+    parsed = {
+        "tipo_comprobante": f"Factura {letter}",
+        "codigo_comprobante": 1 if letter == "A" else 6 if letter == "B" else 11,
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_document_date(issue_value),
+        "emisor": {
+            "nombre": provider_name,
+            "cuit": provider_cuit,
+            "doc_tipo": 80 if provider_cuit else None,
+            "doc_nro": digits(provider_cuit),
+            "condicion_iva": "IVA Responsable Inscripto" if "Responsable Inscripto" in text else None,
+        },
+        "receptor": {
+            "nombre": receiver_name.strip() if receiver_name else None,
+            "cuit": receiver_cuit,
+            "doc_tipo": 80 if receiver_cuit else None,
+            "doc_nro": digits(receiver_cuit),
+            "condicion_iva": "Responsable Inscripto" if receiver_cuit else None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_total,
+        "tributos_total": tributos_total,
+        "impuestos": round_money((iva_total or 0) + (tributos_total or 0)),
+        "total": total,
+        "cae": cae,
+        "fecha_vencimiento_cae": due_date,
+        "iva": [],
+        "tributos": [],
+        "items": [],
+    }
+    return normalize_invoice_json(parsed)
+
+
 def parse_loose_arca_service_ocr(text):
     if "FACTURA" not in text.upper():
         return None
@@ -959,6 +1140,10 @@ def parse_structured_arca_ocr(ocr_text):
     loose_arca = parse_loose_arca_service_ocr(text)
     if loose_arca is not None:
         return loose_arca
+
+    loose_cae = parse_loose_arca_cae_ocr(text)
+    if loose_cae is not None:
+        return loose_cae
 
     compact_arca = parse_compact_arca_ocr(text)
     if compact_arca is not None:
