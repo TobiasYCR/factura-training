@@ -146,7 +146,7 @@ def parse_ar_money(value):
 def parse_money(value):
     text = str(value)
     text = re.sub(r"[^\d,.\-]", "", text)
-    if not text:
+    if not text or not re.search(r"\d", text):
         return None
     if "," in text and "." in text:
         if text.rfind(",") > text.rfind("."):
@@ -831,6 +831,16 @@ def parse_loose_arca_cae_ocr(text):
         or re.search(r"Factura:\s*(\d{4,5})-(\d{8})", text, re.IGNORECASE)
     )
     numbers = re.search(r"Punto de Venta:\s*(\d+)\s+Comp\.?\s*Nro:\s*(\d+)", text, re.IGNORECASE)
+    visual_header = re.search(
+        r"(?:FACTURA\s+([ABC])|\b([ABC])\b.{0,80}?FACTURA).{0,160}?N\S*\s*:?\s*(\d{4,5})-(\d{7,9})",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    visual_no_letter = re.search(
+        r"FACTURA.{0,160}?N\S*\s*:?\s*(\d{4,5})-(\d{7,9})",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
     if header and len(header.groups()) == 3:
         letter = header.group(1).upper()
         point_of_sale = header.group(2).zfill(5)
@@ -839,6 +849,14 @@ def parse_loose_arca_cae_ocr(text):
         letter = "A"
         point_of_sale = header.group(1).zfill(5)
         receipt_number = header.group(2).zfill(8)
+    elif visual_header:
+        letter = (visual_header.group(1) or visual_header.group(2) or "A").upper()
+        point_of_sale = visual_header.group(3).zfill(5)
+        receipt_number = visual_header.group(4).zfill(8)
+    elif visual_no_letter and re.search(r"C[oó]d\.?\s*0?1|IVA\s+(?:Responsable\s+)?Inscripto", text, re.IGNORECASE):
+        letter = "A"
+        point_of_sale = visual_no_letter.group(1).zfill(5)
+        receipt_number = visual_no_letter.group(2).zfill(8)
     elif numbers:
         letter = "A" if re.search(r"IVA\s+(?:Responsable\s+)?Inscripto|IVA\s+10\.?5%|IVA\s+21%", text, re.IGNORECASE) else "C"
         point_of_sale = numbers.group(1).zfill(5)
@@ -867,6 +885,8 @@ def parse_loose_arca_cae_ocr(text):
         first_match(r"FECHA DE EMISION:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
         or first_match(r"Fecha de Emisi\S*n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
         or first_match(r"Fecha de emisi\S*n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+        or first_match(r"Fecha\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+        or first_match(r"FACTURA.{0,220}?(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE | re.DOTALL)
     )
     if not issue_value:
         return None
@@ -881,6 +901,14 @@ def parse_loose_arca_cae_ocr(text):
         provider_name = "OSDE"
     elif "WEST TECH" in upper_text:
         provider_name = "WEST TECH INFORMATICA"
+    elif "PHOTOSTORE" in upper_text or "SUPERFOTO" in upper_text:
+        provider_name = "SUPERFOTO SRL"
+    elif "DECO" in upper_text and "PORCELAN" in upper_text:
+        provider_name = "DECO PORCELANATOS"
+    elif "ABELSON" in upper_text or "JIRIP" in upper_text:
+        provider_name = "JIRIP S.R.L."
+    elif "HOKAMA" in upper_text or "HOKAMAT" in upper_text:
+        provider_name = "HOKAMAT S.R.L."
     else:
         provider_name = first_match(r"Raz[oóÃ³]n Social:\s*([^\n]+)", text)
 
@@ -892,15 +920,34 @@ def parse_loose_arca_cae_ocr(text):
     subtotal = (
         parse_money(first_match(r"Neto Gravado\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
         or parse_money(first_match(r"Importe Neto Gravado:\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+        or parse_money(first_match(r"GRAVADO\s*:?\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
         or parse_money(first_match(r"Por Servicios.*?\s([\d.,]+)\.?\s*IVA", text, re.IGNORECASE | re.DOTALL))
         or parse_money(first_match(r"Total valor Plan de Servicio\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
     )
+    if subtotal is None:
+        subtotal_values = [
+            parse_money(value)
+            for value in re.findall(r"SUBTOTAL\s*:?\s*\$?\s*([\d.,]+)", text, re.IGNORECASE)
+        ]
+        subtotal_values = [value for value in subtotal_values if value is not None]
+        if subtotal_values:
+            subtotal = subtotal_values[-1]
 
     iva_total = 0.0
     for amount in re.findall(r"IVA(?:\s+Inscripto)?\s*(?:10[,.]50|10[,.]5|21(?:[,.]00)?)?\s*%?\s*\$?\s*([\d.,]+)", text, re.IGNORECASE):
         value = parse_money(amount)
         if value:
             iva_total = round_money(iva_total + value)
+    for pattern in (
+        r"Detalle\s+IVA.*?\$?\s*([\d.,]+)",
+        r"I\.?V\.?A\.?\s*(?:INSCRIPTO|INSC)?\s*:?\s*\$?\s*([\d.,]+)",
+        r"I\.?V\.?A\.?\s*21(?:[,.]00)?\s*%?\s*:?\s*\$?\s*([\d.,]+)",
+        r"21\s*%\s*IVA\s*INSC.*?(?:IVA\s*21[,.]00\s*)?([\d.,]+)",
+    ):
+        for amount in re.findall(pattern, text, re.IGNORECASE):
+            value = parse_money(amount)
+            if value and value > iva_total:
+                iva_total = value
     if iva_total == 0:
         iva_total = parse_money(first_match(r"IVA\s+21\.00\s*%\s*([\d.,]+)", text, re.IGNORECASE) or 0)
 
@@ -910,10 +957,12 @@ def parse_loose_arca_cae_ocr(text):
 
     total = (
         parse_money(first_match(r"Importe Total:\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+        or parse_money(first_match(r"^[ \t]*TOTAL[ \t]*:?[ \t]*\$?[ \t]*([\d.,]+)", text, re.IGNORECASE | re.MULTILINE))
+        or parse_money(first_match(r"(?<!SUB)\bTOTAL[ \t]*:?[ \t]*\$?[ \t]*([\d.,]+)", text, re.IGNORECASE))
         or parse_money(first_match(r"Total\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
     )
     if total is None:
-        known_amounts = [amount for amount in (subtotal, iva_total, tributos_total) if amount is not None]
+        known_amounts = [amount for amount in (subtotal, iva_total, tributos_total) if amount]
         if subtotal is not None and len(known_amounts) > 1:
             total = round_money(sum(known_amounts))
         else:
@@ -1357,7 +1406,7 @@ def normalize_invoice_json(parsed):
                         iva["importe"] = expected_amount
             fixed_iva.append(iva)
         normalized["iva"] = fixed_iva
-        if all(isinstance(iva, dict) and as_number(iva.get("importe")) is not None for iva in fixed_iva):
+        if fixed_iva and all(isinstance(iva, dict) and as_number(iva.get("importe")) is not None for iva in fixed_iva):
             normalized["iva_total"] = round_money(sum(iva["importe"] for iva in fixed_iva))
 
     tributos = normalized.get("tributos")
