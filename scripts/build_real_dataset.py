@@ -42,7 +42,6 @@ def load_pairs(input_dir):
             continue
         rows.append(
             {
-                "filename": json_path.with_suffix(".pdf").name,
                 "instruction": instruction_for(data),
                 "input": f"Archivo: {json_path.with_suffix('.pdf').name}\n{ocr_text}",
                 "output": compact_json(data),
