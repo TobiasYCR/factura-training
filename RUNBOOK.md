@@ -177,6 +177,20 @@ En la PC con Tesseract instalado tambien se puede forzar OCR visual:
 python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF --force-ocr
 ```
 
+Para guardar el texto OCR y revisar fallos:
+
+```bash
+python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF --write-ocr --write-json
+```
+
+Para reintentar solamente los fallidos de una corrida anterior:
+
+```bash
+python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF \
+  --failed-from data/real_invoices_analysis/batch_summary.jsonl \
+  --write-ocr --write-json
+```
+
 ## Generar facturas sinteticas
 
 ```bash

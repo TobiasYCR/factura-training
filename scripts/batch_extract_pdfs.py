@@ -11,6 +11,11 @@ from api import extract_document, extract_upload_text
 from ocr import OcrUnavailableError
 
 
+def safe_output_name(path):
+    safe = "".join(char if char.isalnum() or char in "._- " else "_" for char in path.stem)
+    return safe.strip() or "document"
+
+
 def document_label(data):
     if not isinstance(data, dict):
         return None
@@ -57,6 +62,11 @@ def process_file(path, args):
             ocr_lang=args.ocr_lang,
             ocr_dpi=args.ocr_dpi,
         )
+        if args.write_ocr:
+            output_text = args.output_dir / f"{safe_output_name(path)}.txt"
+            output_text.write_text(text, encoding="utf-8")
+            result["ocr_text_file"] = str(output_text)
+
         extracted = extract_document(
             text,
             use_model=args.use_model,
@@ -74,7 +84,7 @@ def process_file(path, args):
             }
         )
         if args.write_json:
-            output_json = args.output_dir / f"{path.stem}.json"
+            output_json = args.output_dir / f"{safe_output_name(path)}.json"
             output_json.write_text(
                 json.dumps(extracted["data"], ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -102,12 +112,28 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=900)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--write-json", action="store_true")
+    parser.add_argument("--write-ocr", action="store_true", help="Guarda el texto extraido/OCR de cada archivo.")
+    parser.add_argument(
+        "--failed-from",
+        help="Procesa solo archivos fallidos listados en un batch_summary.jsonl anterior.",
+    )
     args = parser.parse_args()
 
     args.output_dir = Path(args.output_dir)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     paths = iter_files(args.input_dir, args.pattern)
+    if args.failed_from:
+        failed_paths = set()
+        with open(args.failed_from, "r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                if not item.get("ok"):
+                    failed_paths.add(str(Path(item["file"])))
+        paths = [path for path in paths if str(path) in failed_paths]
+
     if args.limit:
         paths = paths[: args.limit]
     if not paths:
