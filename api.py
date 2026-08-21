@@ -1,6 +1,7 @@
 import argparse
 import io
 import json
+import os
 import re
 import time
 from http import HTTPStatus
@@ -23,6 +24,7 @@ from ocr import DEFAULT_OCR_DPI, DEFAULT_OCR_LANG, OcrUnavailableError, get_ocr_
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MODEL_CACHE = {}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
+API_KEY = os.environ.get("FACTURA_API_KEY")
 
 
 def json_response(handler, status, payload):
@@ -31,7 +33,7 @@ def json_response(handler, status, payload):
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Access-Control-Allow-Origin", "*")
     handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    handler.send_header("Access-Control-Allow-Headers", "Content-Type")
+    handler.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
     handler.send_header("Content-Length", str(len(data)))
     handler.end_headers()
     handler.wfile.write(data)
@@ -182,7 +184,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
         self.end_headers()
 
     def do_GET(self):
@@ -205,6 +207,9 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path != "/extract":
             json_response(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "Endpoint no encontrado."})
+            return
+        if not self.is_authorized():
+            json_response(self, HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "API key invalida o faltante."})
             return
 
         try:
@@ -239,6 +244,12 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             )
         except Exception as error:
             json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(error)})
+
+    def is_authorized(self):
+        if not API_KEY:
+            return True
+        provided = self.headers.get("X-API-Key") or ""
+        return provided == API_KEY
 
     def read_extract_request(self):
         content_length = parse_int(self.headers.get("Content-Length"), 0)

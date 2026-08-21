@@ -151,6 +151,31 @@ curl -X POST "http://127.0.0.1:8000/extract?ocr_lang=spa+eng" -F "file=@factura.
 
 El `GET /health` informa si Tesseract esta disponible y que comando detecto.
 
+### API key para `/extract`
+
+Si se define la variable `FACTURA_API_KEY`, el endpoint `POST /extract` exige el
+header `X-API-Key`. El endpoint `GET /health` queda libre para monitoreo.
+
+Ejemplo local:
+
+```bash
+FACTURA_API_KEY="cambiar-esta-clave" python api.py --host 127.0.0.1 --port 8000
+```
+
+Request autorizada:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true" \
+  -H "X-API-Key: cambiar-esta-clave" \
+  -F "file=@factura.pdf"
+```
+
+En `systemd`, agregar la variable dentro del bloque `[Service]`:
+
+```ini
+Environment="FACTURA_API_KEY=cambiar-esta-clave"
+```
+
 ## Procesar una carpeta completa
 
 Para probar muchos PDFs juntos:
