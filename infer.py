@@ -155,6 +155,10 @@ def parse_money(value):
             text = text.replace(",", "")
     elif "," in text:
         text = text.replace(".", "").replace(",", ".")
+    elif text.count(".") > 1:
+        parts = text.split(".")
+        if parts[-1].isdigit() and len(parts[-1]) == 2:
+            text = "".join(parts[:-1]) + "." + parts[-1]
     return round_money(text)
 
 
