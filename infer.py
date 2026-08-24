@@ -249,6 +249,8 @@ def parse_document_date(value):
         "%d-%m-%y",
         "%m/%d/%Y",
         "%m/%d/%y",
+        "%b %d, %Y",
+        "%B %d, %Y",
         "%b %d %Y",
         "%B %d %Y",
     ):
@@ -277,6 +279,113 @@ def parse_quantity(value):
 def first_match(pattern, text, flags=0):
     match = re.search(pattern, text, flags)
     return match.group(1).strip() if match else None
+
+
+def parse_godaddy_english_receipt_ocr(ocr_text):
+    text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
+    upper_text = text.upper()
+    if "RECEIPT" not in upper_text or "GODADDY" not in upper_text:
+        return None
+
+    number = (
+        first_match(r"Receipt\s*(?:№|No\.?|N[°ºo.]*)?\s*(\d+)", text, re.IGNORECASE | re.DOTALL)
+        or first_match(r"(?:№|No\.?|N[°ºo.]*)\s*(\d{8,12})", text, re.IGNORECASE)
+    )
+    date = first_match(r"DATE:\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})", text, re.IGNORECASE)
+    customer_number = first_match(r"CUSTOMER\s*#:\s*(\d+)", text, re.IGNORECASE)
+    if not (number and date and customer_number):
+        return None
+
+    buyer_block = first_match(r"BILL TO:\s*(.*?)(?:\nPAYMENT:|\nPrevious Balance)", text, re.IGNORECASE | re.DOTALL) or ""
+    buyer_lines = [line.strip().rstrip(",") for line in buyer_block.splitlines() if line.strip()]
+    tax_id = first_match(r"Tax ID:\s*([^\n]+)", buyer_block, re.IGNORECASE)
+    phone = next((line for line in buyer_lines if line.startswith("+")), None)
+    name = buyer_lines[0] if buyer_lines else None
+    business_name = next((line for line in buyer_lines if "TECH" in line.upper()), None)
+    address_lines = [
+        line
+        for line in buyer_lines[1:]
+        if not line.startswith("+") and "Tax ID:" not in line and line != business_name
+    ]
+
+    currency = first_match(r"Total\s*\(([A-Z]{3})\)", text, re.IGNORECASE) or first_match(
+        r"Balance Due\s*\(([A-Z]{3})\)", text, re.IGNORECASE
+    ) or "ARS"
+    total = parse_money(first_match(r"Total\s*\([A-Z]{3}\)\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    paid = parse_money(first_match(r"Received Payment\s*\(?\$?\s*([\d.,]+)\)?", text, re.IGNORECASE))
+    balance_due = parse_money(first_match(r"Balance Due\s*\([A-Z]{3}\)\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    subtotal = total if total is not None else parse_money(first_match(r"Previous Balance\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    taxes = parse_money(first_match(r"Taxes\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    fees = parse_money(first_match(r"Fees\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    payment = re.search(r"PAYMENT:\s*(?P<brand>\w+).*?(?P<last4>\d{4})\s+\$?\s*(?P<amount>[\d.,]+)", text, re.IGNORECASE | re.DOTALL)
+
+    items = []
+    item_section = first_match(r"Term\s+Product\s+Amount\s*(.*?)(?:\nTotal\s*\([A-Z]{3}\)|\nREFERENCE)", text, re.IGNORECASE | re.DOTALL) or ""
+    for line in [line.strip() for line in item_section.splitlines() if line.strip()]:
+        item = re.match(r"(?P<term>\d+\s+\S+)\s+(?P<description>.+?)\s+\$?\s*(?P<amount>[\d.,]+)$", line, re.IGNORECASE)
+        if not item:
+            continue
+        amount = parse_money(item.group("amount"))
+        items.append(
+            {
+                "description": item.group("description"),
+                "quantity": 1,
+                "unit_price": amount,
+                "amount": amount,
+                "term": item.group("term"),
+                "reference": None,
+            }
+        )
+
+    provider_address = first_match(r"GoDaddy\.com, LLC\s*\$?\s*[\d.,]*\s*(.*?United States)", text, re.IGNORECASE | re.DOTALL)
+    provider_lines = [line.strip().rstrip(",") for line in (provider_address or "").splitlines() if line.strip()]
+
+    return normalize_external_document(
+        {
+            "document_type": "external_provider_receipt",
+            "provider": {
+                "name": "GoDaddy.com, LLC",
+                "business_name": "GoDaddy.com, LLC",
+                "tax_id": None,
+                "vat_number": None,
+                "address": ", ".join(provider_lines) if provider_lines else None,
+                "country": "United States",
+                "phone": first_match(r"CONTACT US 24/7\s*([0-9-]+)", text, re.IGNORECASE),
+            },
+            "buyer": {
+                "name": name,
+                "business_name": business_name,
+                "tax_id": digits(tax_id),
+                "vat_number": None,
+                "address": ", ".join(address_lines) if address_lines else None,
+                "country": "Argentina" if "ARGENTINA" in buyer_block.upper() else None,
+                "phone": phone,
+            },
+            "document": {
+                "title": "Receipt",
+                "number": number,
+                "date": parse_document_date(date),
+                "account_number": None,
+                "customer_number": customer_number,
+                "status": "paid" if paid and balance_due == 0 else None,
+            },
+            "currency": currency.upper(),
+            "subtotal": subtotal,
+            "taxes": taxes,
+            "fees": fees,
+            "total": total,
+            "paid": paid,
+            "balance_due": balance_due,
+            "payment": {
+                "method": "card" if payment else None,
+                "card_brand": payment.group("brand") if payment else None,
+                "card_last4": payment.group("last4") if payment else None,
+                "amount": parse_money(payment.group("amount")) if payment else None,
+            },
+            "items": items,
+            "notes": "GoDaddy receipt parsed from English OCR text. Not an ARCA invoice.",
+        }
+    )
 
 
 def parse_godaddy_receipt_ocr(ocr_text):
@@ -1563,7 +1672,7 @@ def parse_loose_arca_service_ocr(text):
     telecom = re.search(r"\b([ABC])\s+Factura\s+N\S*\s*(\d{4,5})-(\d{8})", text, re.IGNORECASE)
     telecom_no_letter = None
     if not telecom and "TELECOM ARGENTINA" in text.upper():
-        telecom_no_letter = re.search(r"Factura\s+N\S*\s*(\d{4,5})-(\d{8})", text, re.IGNORECASE)
+        telecom_no_letter = re.search(r"Factura\s+N[^0-9]{0,8}(\d{4,5})-(\d{8})", text, re.IGNORECASE)
         if not telecom_no_letter:
             telecom_no_letter = re.search(r"\b(\d{4,5})-(\d{8})\b(?=.{0,120}Total Factura)", text, re.IGNORECASE | re.DOTALL)
     header = vistage or telecom
@@ -1605,12 +1714,15 @@ def parse_loose_arca_service_ocr(text):
             or first_match(r"\b(30-71544453-0)\b", text)
         )
         subtotal = parse_money(first_match(r"Neto Gravado Subtotal\s*([\d.,]+)", text, re.IGNORECASE))
+        if subtotal is None:
+            subtotal = parse_money(first_match(r"Neto Gravado\s+(?:Subtotal\s*)?([\d.,]+)", text, re.IGNORECASE))
         iva_total = parse_money(first_match(r"(?:I|L)\S*V\.A\.\s*21%\s*([\d.,]+)", text, re.IGNORECASE) or 0)
         tributos_total = 0.0
         for amount in re.findall(r"(?:PERCEP\. IIBB|Percep\. IVA)[^\n\d-]*([\d.,]+)", text, re.IGNORECASE):
             tributos_total = round_money(tributos_total + (parse_money(amount) or 0))
         total = (
-            parse_money(first_match(r"Total Factura\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+            parse_money(first_match(r"TOTAL A PAGAR\s*:?\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+            or parse_money(first_match(r"Total Factura\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
             or parse_money(first_match(r"TOTAL A PAGAR\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
         )
         barcode = re.search(r"(\d{11})01(\d{4})(\d{14})(\d{8})", text)
@@ -2057,7 +2169,8 @@ def normalize_external_document(parsed):
 
 def parse_supported_document_ocr(ocr_text):
     return (
-        parse_godaddy_ocr_receipt_ocr(ocr_text)
+        parse_godaddy_english_receipt_ocr(ocr_text)
+        or parse_godaddy_ocr_receipt_ocr(ocr_text)
         or parse_godaddy_receipt_ocr(ocr_text)
         or parse_teamwork_invoice_ocr(ocr_text)
         or parse_structured_arca_ocr(ocr_text)
