@@ -284,7 +284,7 @@ def first_match(pattern, text, flags=0):
 def parse_godaddy_english_receipt_ocr(ocr_text):
     text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
     upper_text = text.upper()
-    if "RECEIPT" not in upper_text or "GODADDY" not in upper_text:
+    if "RECEIPT" not in upper_text or not re.search(r"CUSTOMER\s*#|BILL TO|BALANCE DUE", text, re.IGNORECASE):
         return None
 
     number = (
@@ -311,18 +311,18 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
     currency = first_match(r"Total\s*\(([A-Z]{3})\)", text, re.IGNORECASE) or first_match(
         r"Balance Due\s*\(([A-Z]{3})\)", text, re.IGNORECASE
     ) or "ARS"
-    total = parse_money(first_match(r"Total\s*\([A-Z]{3}\)\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
-    paid = parse_money(first_match(r"Received Payment\s*\(?\$?\s*([\d.,]+)\)?", text, re.IGNORECASE))
-    balance_due = parse_money(first_match(r"Balance Due\s*\([A-Z]{3}\)\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
-    subtotal = total if total is not None else parse_money(first_match(r"Previous Balance\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
-    taxes = parse_money(first_match(r"Taxes\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
-    fees = parse_money(first_match(r"Fees\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
-    payment = re.search(r"PAYMENT:\s*(?P<brand>\w+).*?(?P<last4>\d{4})\s+\$?\s*(?P<amount>[\d.,]+)", text, re.IGNORECASE | re.DOTALL)
+    total = parse_money(first_match(r"Total\s*\([A-Z]{3}\)\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+    paid = parse_money(first_match(r"Received Payment\s*\(?\$?\s*([\d.,\s]+)\)?", text, re.IGNORECASE))
+    balance_due = parse_money(first_match(r"Balance Due\s*\([A-Z]{3}\)\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+    subtotal = total if total is not None else parse_money(first_match(r"Previous Balance\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+    taxes = parse_money(first_match(r"Taxes\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE) or 0)
+    fees = parse_money(first_match(r"Fees\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE) or 0)
+    payment = re.search(r"PAYMENT:\s*(?P<brand>\w+).*?(?P<last4>\d{4})\s+\$?\s*(?P<amount>[\d.,\s]+)", text, re.IGNORECASE | re.DOTALL)
 
     items = []
     item_section = first_match(r"Term\s+Product\s+Amount\s*(.*?)(?:\nTotal\s*\([A-Z]{3}\)|\nREFERENCE)", text, re.IGNORECASE | re.DOTALL) or ""
     for line in [line.strip() for line in item_section.splitlines() if line.strip()]:
-        item = re.match(r"(?P<term>\d+\s+\S+)\s+(?P<description>.+?)\s+\$?\s*(?P<amount>[\d.,]+)$", line, re.IGNORECASE)
+        item = re.match(r"(?P<term>\d+\s+\S+)\s+(?P<description>.+?)\s+\$?\s*(?P<amount>[\d.,\s]+)$", line, re.IGNORECASE)
         if not item:
             continue
         amount = parse_money(item.group("amount"))
@@ -774,23 +774,30 @@ def parse_ifastnet_invoice_ocr(ocr_text):
 def parse_aerolineas_credit_fiscal_ocr(ocr_text):
     text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
     upper_text = text.upper()
-    if "CONSTANCIA DE CREDITO FISCAL" not in upper_text or "AEROLINEAS ARGENTINAS" not in upper_text:
+    if "CONSTANCIA DE CREDITO FISCAL" not in upper_text:
         return None
 
-    number = first_match(r"Constancia Nro\.:\s*(\d+)", text, re.IGNORECASE)
-    date = first_match(r"Fecha\s*\.:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
-    provider_name = first_match(r"Denominacion\s*:\s*([^\n]+)", text, re.IGNORECASE) or "AEROLINEAS ARGENTINAS S.A."
-    provider_cuit = first_match(r"C\.U\.I\.T\.?\s*Nro\.:\s*(\d{2}-\d{8}-\d|\d{11})", text, re.IGNORECASE)
-    receiver_name = first_match(r"Apellido y nombres o denominacion\s*:\s*([^\n]+)", text, re.IGNORECASE)
-    cuit_matches = re.findall(r"C\.U\.I\.T\.?\s*Nro\.:\s*(\d{2}-\d{8}-\d|\d{11})", text, re.IGNORECASE)
+    number = first_match(r"Constancia\s+N\S*\.?:?\s*([0-9 -]+)", text, re.IGNORECASE)
+    if number:
+        number = re.sub(r"\s+", "", number)
+    date = first_match(r"Fecha\s*\.?:?\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    provider_name = (
+        first_match(r"(?:Denominacion|Apellido y nombres o denominaci\S*n)\s*:?\s*([^\n]+)", text, re.IGNORECASE)
+        or "AEROLINEAS ARGENTINAS S.A."
+    )
+    provider_cuit = first_match(r"C\.U\.I\.T\.?\s*N\S*\.?:?\s*(\d{2}-\d{8}-\d|\d{11})", text, re.IGNORECASE)
+    receiver_name = first_match(r"B - Datos del receptor:.*?Apellido y Nombres o denominaci\S*n\s*:?\s*([^\n]+)", text, re.IGNORECASE | re.DOTALL)
+    cuit_matches = re.findall(r"C\.U\.I\.T\.?\s*N\S*\.?:?\s*(\d{2}-\d{8}-\d|\d{11})", text, re.IGNORECASE)
     receiver_cuit = cuit_matches[1] if len(cuit_matches) > 1 else None
-    original_number = first_match(r"- Numero:\s*([^\n]+)", text, re.IGNORECASE)
+    original_number = first_match(r"- N\S*mero:\s*([^\n]+)", text, re.IGNORECASE)
     original_date = first_match(r"- Fecha\s*:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
-    total = parse_money(first_match(r"Importe del comprobante\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
-    base_105 = parse_money(first_match(r"Importe gravado 10\.5%\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
-    tax_105 = parse_money(first_match(r"Importe del credito fiscal 10\.5%\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
-    base_21 = parse_money(first_match(r"Importe gravado 21%\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
-    tax_21 = parse_money(first_match(r"Importe del credito fiscal 21%\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    total = parse_money(first_match(r"Importe del comprobante\s*:\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+    base_105 = parse_money(first_match(r"Importe gravado 10\.5%\s*:\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+    tax_105 = parse_money(
+        first_match(r"Importe del cr\S*dito fiscal(?:\s*10\.5%)?\s*:\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE)
+    )
+    base_21 = parse_money(first_match(r"Importe gravado 21%\s*:\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE) or 0)
+    tax_21 = parse_money(first_match(r"Importe del cr\S*dito fiscal 21%\s*:\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE) or 0)
 
     if not (number and date and total is not None):
         return None
@@ -850,7 +857,7 @@ def parse_aerolineas_credit_fiscal_ocr(ocr_text):
                     "reference": parse_document_date(original_date) if original_date else None,
                 }
             ],
-            "notes": "Aerolíneas Argentinas fiscal credit certificate. Not an ARCA invoice.",
+            "notes": "Airline fiscal credit certificate. Not an ARCA invoice.",
         }
     )
 
