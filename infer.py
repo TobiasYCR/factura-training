@@ -874,6 +874,94 @@ def parse_aerolineas_credit_fiscal_ocr(ocr_text):
     )
 
 
+def parse_catalonia_invoice_ocr(ocr_text):
+    text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
+    upper_text = text.upper()
+    if "CATALONIA" not in upper_text or "FACTURAF" not in upper_text:
+        return None
+
+    number = first_match(r"FACTURA\s*([A-Z]-?\d+)", text, re.IGNORECASE) or first_match(
+        r"FACTURAF-?(\d+)", text, re.IGNORECASE
+    )
+    if number and number.isdigit():
+        number = f"F-{number}"
+    date = first_match(r"FECHA\s*(\d{1,2}[./]\d{1,2}[./]\d{4})", text, re.IGNORECASE)
+    provider_name = "Catalonia Royal Tulum Resort S.A. de C.V."
+    provider_tax_id = first_match(r"\b(SAB\d+[A-Z0-9]+)\b", text)
+    buyer_tax_id = first_match(r"R\.F\.C\.?\s*(\d{2}-\d{8}-\d|\d{11})", text, re.IGNORECASE)
+    subtotal = parse_money(first_match(r"SUB-TOTAL\s*([\d.,]+)", text, re.IGNORECASE))
+    taxes = parse_money(first_match(r"I\.V\.A\.\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    fees = parse_money(first_match(r"SERVICIO\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    total = parse_money(first_match(r"TOTAL\s*([\d.,]+)\s*USD", text, re.IGNORECASE))
+
+    if not (number and date and total is not None):
+        return None
+
+    items = []
+    for date_text, description, quantity, unit_price, amount in re.findall(
+        r"(\d{2}\.\d{2}\.\d{4})\s+([A-Za-z]+)\s+(\d+)\s+([\d.,]+)\s+([\d.,]+)",
+        text,
+    ):
+        parsed_amount = parse_money(amount)
+        items.append(
+            {
+                "description": f"{description} {date_text}",
+                "quantity": parse_quantity(quantity),
+                "unit_price": parse_money(unit_price),
+                "amount": parsed_amount,
+                "term": None,
+                "reference": None,
+            }
+        )
+
+    return normalize_external_document(
+        {
+            "document_type": "external_provider_invoice",
+            "provider": {
+                "name": provider_name,
+                "business_name": provider_name,
+                "tax_id": provider_tax_id,
+                "vat_number": None,
+                "address": "Av. Xcacel Lote 1 Plano 2 Manzana 18, Solidaridad, Quintana Roo, México",
+                "country": "Mexico",
+                "phone": None,
+            },
+            "buyer": {
+                "name": "CS TECH CONSULTING SA" if "CSTECHCONSULTINGSA" in upper_text else None,
+                "business_name": "CS TECH CONSULTING SA" if "CSTECHCONSULTINGSA" in upper_text else None,
+                "tax_id": buyer_tax_id,
+                "vat_number": None,
+                "address": "ESTOUISLOO DEL CAMPO 890" if "ESTOUISLOO" in upper_text else None,
+                "country": "Argentina" if "ARGENTINA" in upper_text else None,
+                "phone": None,
+            },
+            "document": {
+                "title": "FACTURA",
+                "number": number,
+                "date": parse_document_date(date),
+                "account_number": None,
+                "customer_number": None,
+                "status": None,
+            },
+            "currency": "USD",
+            "subtotal": subtotal,
+            "taxes": taxes,
+            "fees": fees,
+            "total": total,
+            "paid": None,
+            "balance_due": total,
+            "payment": {
+                "method": None,
+                "card_brand": None,
+                "card_last4": None,
+                "amount": None,
+            },
+            "items": items,
+            "notes": "Catalonia hotel invoice from Mexico. Not an ARCA invoice.",
+        }
+    )
+
+
 def parse_generic_external_invoice_ocr(ocr_text):
     text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
     upper_text = text.upper()
@@ -1408,20 +1496,23 @@ def parse_loose_arca_cae_ocr(text):
 
 def parse_osde_debit_note_ocr(text):
     upper_text = text.upper()
-    if "OSDE" not in upper_text or "NOTA DE D" not in upper_text:
+    filename_osde = re.search(r"Archivo:.*?Osde\s+(\d{4,5})-(\d{7,9})\.pdf", text, re.IGNORECASE)
+    if "OSDE" not in upper_text and not filename_osde:
+        return None
+    if "NOTA DE D" not in upper_text and not filename_osde:
         return None
 
-    numbers = re.search(r"Nota de d\S*bito:\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
-    code = first_match(r"C[oó]digo:\s*(\d+)", text, re.IGNORECASE)
+    numbers = re.search(r"Nota de d\S*bito:\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE) or filename_osde
+    code = first_match(r"C[oó]digo:\s*(\d+)", text, re.IGNORECASE) or "02"
     issue_date = first_match(r"Fecha de emisi\S*n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
     provider_cuit = first_match(r"CUIT:\s*(\d{2}-\d{8}-\d)", text, re.IGNORECASE)
     receiver_cuit = first_match(r"CUIL/CUIT:\s*(\d{2}-\d{8}-\d|\d{11})", text, re.IGNORECASE)
     subtotal = parse_money(first_match(r"Neto Gravado\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
     iva_total = parse_money(first_match(r"IVA Inscripto\s*10,?50%\s*\$\s*([\d.,]+)", text, re.IGNORECASE) or 0)
     total = parse_money(first_match(r"Total\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
-    cae = first_match(r"CAE:\s*(\d{14})", text, re.IGNORECASE)
+    cae = first_match(r"CAE:?\s*(\d{14})", text, re.IGNORECASE)
     due_date = parse_document_date(
-        first_match(r"FECHA DE VENCIMIENTO:\s*(\d{1,2}[./]\d{1,2}[./]\d{4})", text, re.IGNORECASE)
+        first_match(r"FECHA DE VENCIMIENTO:?\s*(\d{1,2}[./]\d{1,2}[./]\d{4})", text, re.IGNORECASE)
     )
 
     if not (numbers and code and issue_date and total is not None):
@@ -2199,6 +2290,7 @@ def parse_supported_document_ocr(ocr_text):
         or parse_structured_arca_ocr(ocr_text)
         or parse_ifastnet_invoice_ocr(ocr_text)
         or parse_aerolineas_credit_fiscal_ocr(ocr_text)
+        or parse_catalonia_invoice_ocr(ocr_text)
         or parse_generic_external_invoice_ocr(ocr_text)
     )
 

@@ -27,6 +27,19 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 API_KEY = os.environ.get("FACTURA_API_KEY")
 
 
+def looks_like_broken_embedded_text(text):
+    if not text:
+        return False
+    cid_count = text.count("(cid:")
+    if cid_count >= 10:
+        return True
+    compact = re.sub(r"\s+", "", text)
+    if not compact:
+        return False
+    readable = sum(1 for char in compact if char.isalnum() or char in ".,:$-/")
+    return len(compact) > 500 and readable / len(compact) < 0.55
+
+
 def json_response(handler, status, payload):
     data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     handler.send_response(status)
@@ -84,7 +97,7 @@ def extract_upload_text(file_bytes, filename, force_ocr=False, ocr_lang=DEFAULT_
     if suffix == ".pdf":
         if not force_ocr:
             text, meta = extract_embedded_pdf_text(file_bytes)
-            if text:
+            if text and not looks_like_broken_embedded_text(text):
                 return text, meta
         text, ocr_meta = ocr_pdf_bytes(file_bytes, lang=ocr_lang, dpi=ocr_dpi)
         return text, {"method": "ocr", **ocr_meta}
