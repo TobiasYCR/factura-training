@@ -284,16 +284,20 @@ def first_match(pattern, text, flags=0):
 def parse_godaddy_english_receipt_ocr(ocr_text):
     text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
     upper_text = text.upper()
-    if "RECEIPT" not in upper_text or not re.search(r"CUSTOMER\s*#|BILL TO|BALANCE DUE", text, re.IGNORECASE):
+    filename_number = first_match(r"Archivo:.*?GoDaddy\s+(\d+)\.pdf", text, re.IGNORECASE)
+    if not filename_number and (
+        "RECEIPT" not in upper_text or not re.search(r"CUSTOMER\s*#|BILL TO|BALANCE DUE", text, re.IGNORECASE)
+    ):
         return None
 
     number = (
-        first_match(r"Receipt\s*(?:№|No\.?|N[°ºo.]*)?\s*(\d+)", text, re.IGNORECASE | re.DOTALL)
+        filename_number
+        or first_match(r"Receipt\s*(?:№|No\.?|N[°ºo.]*)?\s*(\d+)", text, re.IGNORECASE | re.DOTALL)
         or first_match(r"(?:№|No\.?|N[°ºo.]*)\s*(\d{8,12})", text, re.IGNORECASE)
     )
-    date = first_match(r"DATE:\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})", text, re.IGNORECASE)
-    customer_number = first_match(r"CUSTOMER\s*#:\s*(\d+)", text, re.IGNORECASE)
-    if not (number and date and customer_number):
+    date = first_match(r"DATE:?\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})", text, re.IGNORECASE)
+    customer_number = first_match(r"CUSTOMER\s*#:?\s*(\d+)", text, re.IGNORECASE)
+    if not number:
         return None
 
     buyer_block = first_match(r"BILL TO:\s*(.*?)(?:\nPAYMENT:|\nPrevious Balance)", text, re.IGNORECASE | re.DOTALL) or ""
@@ -315,6 +319,14 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
     paid = parse_money(first_match(r"Received Payment\s*\(?\$?\s*([\d.,\s]+)\)?", text, re.IGNORECASE))
     balance_due = parse_money(first_match(r"Balance Due\s*\([A-Z]{3}\)\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
     subtotal = total if total is not None else parse_money(first_match(r"Previous Balance\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+    if total is None:
+        amounts = [parse_money(amount) for amount in re.findall(r"\$\s*([\d.,\s]+)", text)]
+        amounts = [amount for amount in amounts if amount is not None]
+        total = max(amounts) if amounts else None
+    if subtotal is None:
+        subtotal = total
+    if paid is None and balance_due == 0 and total is not None:
+        paid = total
     taxes = parse_money(first_match(r"Taxes\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE) or 0)
     fees = parse_money(first_match(r"Fees\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE) or 0)
     payment = re.search(r"PAYMENT:\s*(?P<brand>\w+).*?(?P<last4>\d{4})\s+\$?\s*(?P<amount>[\d.,\s]+)", text, re.IGNORECASE | re.DOTALL)
@@ -1672,16 +1684,20 @@ def parse_lenovo_arca_ocr(text):
 
 
 def parse_loose_arca_service_ocr(text):
-    if "FACTURA" not in text.upper():
+    upper_text = text.upper()
+    filename_cv = re.search(r"Archivo:.*?\bCV\s+(\d{4,5})-(\d{7,9})\.pdf", text, re.IGNORECASE)
+    if "FACTURA" not in upper_text and not filename_cv:
         return None
 
     vistage = re.search(r"\b([ABC])\s+N\S*:\s*(\d{4,5})-(\d{8})", text, re.IGNORECASE)
     telecom = re.search(r"\b([ABC])\s+Factura\s+N\S*\s*(\d{4,5})-(\d{8})", text, re.IGNORECASE)
     telecom_no_letter = None
-    if not telecom and "TELECOM ARGENTINA" in text.upper():
+    if not telecom and ("TELECOM ARGENTINA" in upper_text or "CABLEVISI" in upper_text or filename_cv):
         telecom_no_letter = re.search(r"Factura\s+N[^0-9]{0,8}(\d{4,5})-(\d{8})", text, re.IGNORECASE)
         if not telecom_no_letter:
             telecom_no_letter = re.search(r"\b(\d{4,5})-(\d{8})\b(?=.{0,120}Total Factura)", text, re.IGNORECASE | re.DOTALL)
+        if not telecom_no_letter and filename_cv:
+            telecom_no_letter = filename_cv
     header = vistage or telecom
     if not header and not telecom_no_letter:
         return None
