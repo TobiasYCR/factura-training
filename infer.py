@@ -183,25 +183,37 @@ def parse_document_date(value):
     value = str(value).strip()
     month_aliases = {
         "ene": "01",
+        "enero": "01",
         "jan": "01",
         "fev": "02",
         "feb": "02",
+        "febrero": "02",
         "mar": "03",
+        "marzo": "03",
         "abr": "04",
+        "abril": "04",
         "apr": "04",
         "mai": "05",
         "may": "05",
+        "mayo": "05",
         "jun": "06",
+        "junio": "06",
         "jul": "07",
+        "julio": "07",
         "ago": "08",
+        "agosto": "08",
         "aug": "08",
         "set": "09",
         "sep": "09",
+        "septiembre": "09",
         "out": "10",
         "oct": "10",
+        "octubre": "10",
         "nov": "11",
+        "noviembre": "11",
         "dez": "12",
         "dec": "12",
+        "diciembre": "12",
     }
     long_spanish_match = re.search(
         r"(\d{1,2})\s+de\s+([A-Za-záéíóúñ.]+)\s+de\s+(\d{4})",
@@ -209,10 +221,20 @@ def parse_document_date(value):
         re.IGNORECASE,
     )
     if long_spanish_match:
-        month_key = long_spanish_match.group(2).lower().strip(".")[:3]
-        month = month_aliases.get(month_key)
+        month_name = long_spanish_match.group(2).lower().strip(".")
+        month = month_aliases.get(month_name) or month_aliases.get(month_name[:3])
         if month:
             return f"{long_spanish_match.group(3)}-{month}-{int(long_spanish_match.group(1)):02d}"
+    uppercase_spanish_match = re.search(
+        r"(\d{1,2})\s+DE\s+([A-ZÁÉÍÓÚÑ]+)\s+DE\s+(\d{4})",
+        value,
+        re.IGNORECASE,
+    )
+    if uppercase_spanish_match:
+        month_name = uppercase_spanish_match.group(2).lower()
+        month = month_aliases.get(month_name) or month_aliases.get(month_name[:3])
+        if month:
+            return f"{uppercase_spanish_match.group(3)}-{month}-{int(uppercase_spanish_match.group(1)):02d}"
     alias_match = re.fullmatch(r"(\d{1,2})\s*-\s*([A-Za-z]{3})\s*-\s*(\d{4})", value)
     if alias_match:
         month = month_aliases.get(alias_match.group(2).lower())
@@ -636,6 +658,90 @@ def parse_ifastnet_invoice_ocr(ocr_text):
             },
             "items": items,
             "notes": f"iFastNet external hosting invoice. Due date: {parse_document_date(due_date) if due_date else None}. Not an ARCA invoice.",
+        }
+    )
+
+
+def parse_aerolineas_credit_fiscal_ocr(ocr_text):
+    text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
+    upper_text = text.upper()
+    if "CONSTANCIA DE CREDITO FISCAL" not in upper_text or "AEROLINEAS ARGENTINAS" not in upper_text:
+        return None
+
+    number = first_match(r"Constancia Nro\.:\s*(\d+)", text, re.IGNORECASE)
+    date = first_match(r"Fecha\s*\.:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    provider_name = first_match(r"Denominacion\s*:\s*([^\n]+)", text, re.IGNORECASE) or "AEROLINEAS ARGENTINAS S.A."
+    provider_cuit = first_match(r"C\.U\.I\.T\.?\s*Nro\.:\s*(\d{2}-\d{8}-\d|\d{11})", text, re.IGNORECASE)
+    receiver_name = first_match(r"Apellido y nombres o denominacion\s*:\s*([^\n]+)", text, re.IGNORECASE)
+    cuit_matches = re.findall(r"C\.U\.I\.T\.?\s*Nro\.:\s*(\d{2}-\d{8}-\d|\d{11})", text, re.IGNORECASE)
+    receiver_cuit = cuit_matches[1] if len(cuit_matches) > 1 else None
+    original_number = first_match(r"- Numero:\s*([^\n]+)", text, re.IGNORECASE)
+    original_date = first_match(r"- Fecha\s*:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    total = parse_money(first_match(r"Importe del comprobante\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    base_105 = parse_money(first_match(r"Importe gravado 10\.5%\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    tax_105 = parse_money(first_match(r"Importe del credito fiscal 10\.5%\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    base_21 = parse_money(first_match(r"Importe gravado 21%\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    tax_21 = parse_money(first_match(r"Importe del credito fiscal 21%\s*:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+
+    if not (number and date and total is not None):
+        return None
+
+    taxes = round_money((tax_105 or 0) + (tax_21 or 0))
+    subtotal = round_money((base_105 or 0) + (base_21 or 0)) if base_105 is not None else None
+
+    return normalize_external_document(
+        {
+            "document_type": "external_provider_invoice",
+            "provider": {
+                "name": provider_name,
+                "business_name": provider_name,
+                "tax_id": provider_cuit,
+                "vat_number": None,
+                "address": first_match(r"Domicilio\s*:\s*([^\n]+)", text, re.IGNORECASE),
+                "country": "Argentina",
+                "phone": None,
+            },
+            "buyer": {
+                "name": receiver_name,
+                "business_name": receiver_name,
+                "tax_id": receiver_cuit,
+                "vat_number": None,
+                "address": first_match(r"B - Datos del Receptor.*?Domicilio\s*:\s*([^\n]+)", text, re.IGNORECASE | re.DOTALL),
+                "country": "Argentina",
+                "phone": None,
+            },
+            "document": {
+                "title": "CONSTANCIA DE CREDITO FISCAL",
+                "number": number,
+                "date": parse_document_date(date),
+                "account_number": None,
+                "customer_number": None,
+                "status": None,
+            },
+            "currency": "ARS",
+            "subtotal": subtotal,
+            "taxes": taxes,
+            "fees": 0.0,
+            "total": total,
+            "paid": None,
+            "balance_due": None,
+            "payment": {
+                "method": None,
+                "card_brand": None,
+                "card_last4": None,
+                "amount": None,
+            },
+            "items": [
+                {
+                    "description": f"Credito fiscal del comprobante {original_number or ''}".strip(),
+                    "quantity": 1,
+                    "unit_price": total,
+                    "amount": total,
+                    "term": None,
+                    "reference": parse_document_date(original_date) if original_date else None,
+                }
+            ],
+            "notes": "Aerolíneas Argentinas fiscal credit certificate. Not an ARCA invoice.",
         }
     )
 
@@ -1261,7 +1367,7 @@ def parse_despegar_arca_ocr(text):
     if "DESPEGAR.COM.AR" not in upper_text or "COMPROBANTE" not in upper_text:
         return None
 
-    numbers = re.search(r"Factura\s+(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+    document_header = re.search(r"(Factura|Nota\s+Cr\S*dito)\s+(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
     code = first_match(r"C\S*digo\s*(\d+)", text, re.IGNORECASE)
     issue_date = first_match(r"Buenos Aires\s+(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
     provider_cuit = first_match(r"CUIT:\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
@@ -1275,11 +1381,12 @@ def parse_despegar_arca_ocr(text):
     cae = first_match(r"C\.A\.E\.:\s*(\d{14})", text, re.IGNORECASE)
     due_date = first_match(r"Fecha Vto\.:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
 
-    if not (numbers and code and issue_date and total is not None):
+    if not (document_header and code and issue_date and total is not None):
         return None
 
-    point_of_sale = numbers.group(1).zfill(5)
-    receipt_number = numbers.group(2).zfill(8)
+    document_kind = "Nota de crédito" if "NOTA" in document_header.group(1).upper() else "Factura"
+    point_of_sale = document_header.group(2).zfill(5)
+    receipt_number = document_header.group(3).zfill(8)
     iva = []
     if iva_amount:
         iva.append({"codigo": 4, "descripcion": "10.5%", "base_imponible": None, "importe": iva_amount})
@@ -1315,7 +1422,7 @@ def parse_despegar_arca_ocr(text):
         tributos_total = round_money(sum(item["importe"] for item in tributos))
 
     parsed = {
-        "tipo_comprobante": "Factura A",
+        "tipo_comprobante": f"{document_kind} A",
         "codigo_comprobante": int(code),
         "punto_venta": point_of_sale,
         "numero_comprobante": receipt_number,
@@ -1343,6 +1450,101 @@ def parse_despegar_arca_ocr(text):
         "iva_total": iva_total,
         "tributos_total": tributos_total,
         "impuestos": taxes_total,
+        "total": total,
+        "cae": cae,
+        "fecha_vencimiento_cae": parse_document_date(due_date) if due_date else None,
+        "iva": iva,
+        "tributos": tributos,
+        "items": items,
+    }
+    return normalize_invoice_json(parsed)
+
+
+def parse_lenovo_arca_ocr(text):
+    upper_text = text.upper()
+    if "LENOVO ARGENTINA" not in upper_text or "FACTURA DE VENTA" not in upper_text:
+        return None
+
+    numbers = re.search(r"FACTURA DE VENTA\s+N\S*\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+    code = first_match(r"C\S*digo\s+N\S*\s*(\d+)", text, re.IGNORECASE)
+    issue_date = first_match(r"Fecha de Emisi\S*n:\s*(\d{1,2}\s+DE\s+[A-ZÁÉÍÓÚÑ]+\s+DE\s+\d{4})", text, re.IGNORECASE)
+    provider_cuit = first_match(r"C\.U\.I\.T\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
+    receiver_name = first_match(r"Se\S*or/es\s*([^\n]+?)\s+Fecha de Vencimiento", text, re.IGNORECASE)
+    receiver_cuit = first_match(r"C\.U\.I\.T:\s*(\d{11}|\d{2}-\d{8}-\d)", text, re.IGNORECASE)
+    subtotal = parse_money(first_match(r"SUBTOTAL\.+\$\s*([\d.,]+)", text, re.IGNORECASE))
+    iva_105 = parse_money(first_match(r"I\.V\.A\.INSC\.10,50\s*%\.+\$\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    tributos = []
+    for description, rate, amount in re.findall(r"((?:IIBB|Percepcion IIBB)[^\n$]*?)\s+([\d.,]+)\s*%\.+\$\s*([\d.,]+)", text, re.IGNORECASE):
+        parsed_amount = parse_money(amount)
+        if parsed_amount:
+            tributos.append(
+                {
+                    "codigo": 99,
+                    "descripcion": description.strip(),
+                    "base_imponible": subtotal,
+                    "alicuota": parse_money(rate),
+                    "importe": parsed_amount,
+                }
+            )
+    tributos_total = round_money(sum(item["importe"] for item in tributos)) if tributos else 0.0
+    total = round_money((subtotal or 0) + (iva_105 or 0) + tributos_total) if subtotal is not None else None
+    cae = first_match(r"C\.A\.E\.:\s*(\d{14})", text, re.IGNORECASE)
+    due_date = first_match(r"FECHA VTO:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+
+    if not (numbers and code and issue_date and subtotal is not None and total is not None):
+        return None
+
+    point_of_sale = numbers.group(1).zfill(5)
+    receipt_number = numbers.group(2).zfill(8)
+    iva = []
+    if iva_105:
+        iva.append({"codigo": 4, "descripcion": "10.5%", "base_imponible": subtotal, "importe": iva_105})
+
+    items = []
+    item_match = re.search(
+        r"(?P<code>ZA[A-Z0-9]+)\s+\d+\s+(?P<description>.+?)\s+(?P<quantity>\d+)\s+(?P<unit>[\d.,]+)\s+\*\s+(?P<amount>[\d.,]+)",
+        text,
+        re.IGNORECASE,
+    )
+    if item_match:
+        items.append(
+            {
+                "descripcion": item_match.group("description").strip(),
+                "cantidad": parse_quantity(item_match.group("quantity")),
+                "precio_unitario": parse_money(item_match.group("unit")),
+                "importe": parse_money(item_match.group("amount")),
+            }
+        )
+
+    parsed = {
+        "tipo_comprobante": "Factura A",
+        "codigo_comprobante": int(code),
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_document_date(issue_date),
+        "emisor": {
+            "nombre": "Lenovo Argentina SRL",
+            "cuit": provider_cuit,
+            "doc_tipo": 80 if provider_cuit else None,
+            "doc_nro": digits(provider_cuit),
+            "condicion_iva": "IVA Responsable Inscripto",
+        },
+        "receptor": {
+            "nombre": receiver_name,
+            "cuit": receiver_cuit,
+            "doc_tipo": 80 if receiver_cuit else None,
+            "doc_nro": digits(receiver_cuit),
+            "condicion_iva": "IVA Responsable Inscripto" if receiver_cuit else None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_105,
+        "tributos_total": tributos_total,
+        "impuestos": round_money((iva_105 or 0) + tributos_total),
         "total": total,
         "cae": cae,
         "fecha_vencimiento_cae": parse_document_date(due_date) if due_date else None,
@@ -1549,6 +1751,10 @@ def parse_structured_arca_ocr(ocr_text):
     despegar_arca = parse_despegar_arca_ocr(text)
     if despegar_arca is not None:
         return despegar_arca
+
+    lenovo_arca = parse_lenovo_arca_ocr(text)
+    if lenovo_arca is not None:
+        return lenovo_arca
 
     osde_debit_note = parse_osde_debit_note_ocr(text)
     if osde_debit_note is not None:
@@ -1856,6 +2062,7 @@ def parse_supported_document_ocr(ocr_text):
         or parse_teamwork_invoice_ocr(ocr_text)
         or parse_structured_arca_ocr(ocr_text)
         or parse_ifastnet_invoice_ocr(ocr_text)
+        or parse_aerolineas_credit_fiscal_ocr(ocr_text)
         or parse_generic_external_invoice_ocr(ocr_text)
     )
 
