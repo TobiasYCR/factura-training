@@ -140,7 +140,7 @@ def round_money(value):
 
 
 def parse_ar_money(value):
-    return round_money(str(value).replace(".", "").replace(",", "."))
+    return parse_money(value)
 
 
 def parse_money(value):
