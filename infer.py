@@ -136,6 +136,19 @@ def as_number(value):
 
 
 def round_money(value):
+    if isinstance(value, str):
+        value = re.sub(r"[^\d,.\-]", "", value)
+        if "," in value and "." in value:
+            if value.rfind(",") > value.rfind("."):
+                value = value.replace(".", "").replace(",", ".")
+            else:
+                value = value.replace(",", "")
+        elif "," in value:
+            value = value.replace(".", "").replace(",", ".")
+        elif value.count(".") > 1:
+            parts = value.split(".")
+            if parts[-1].isdigit() and len(parts[-1]) == 2:
+                value = "".join(parts[:-1]) + "." + parts[-1]
     return round(float(value) + 1e-9, 2)
 
 
