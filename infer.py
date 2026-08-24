@@ -165,6 +165,7 @@ def parse_ar_date(value):
 def parse_document_date(value):
     value = str(value).strip()
     month_aliases = {
+        "ene": "01",
         "jan": "01",
         "fev": "02",
         "feb": "02",
@@ -185,6 +186,16 @@ def parse_document_date(value):
         "dez": "12",
         "dec": "12",
     }
+    long_spanish_match = re.search(
+        r"(\d{1,2})\s+de\s+([A-Za-záéíóúñ.]+)\s+de\s+(\d{4})",
+        value,
+        re.IGNORECASE,
+    )
+    if long_spanish_match:
+        month_key = long_spanish_match.group(2).lower().strip(".")[:3]
+        month = month_aliases.get(month_key)
+        if month:
+            return f"{long_spanish_match.group(3)}-{month}-{int(long_spanish_match.group(1)):02d}"
     alias_match = re.fullmatch(r"(\d{1,2})\s*-\s*([A-Za-z]{3})\s*-\s*(\d{4})", value)
     if alias_match:
         month = month_aliases.get(alias_match.group(2).lower())
@@ -220,16 +231,19 @@ def first_match(pattern, text, flags=0):
 
 def parse_godaddy_receipt_ocr(ocr_text):
     text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
-    text = text.replace("NÚMERO DE CLIENTE", "NÃšMERO DE CLIENTE")
     text = text.replace("Duración Producto Cantidad", "Plazo Producto Cantidad")
     if "Recibo" not in text or "NÚMERO DE CLIENTE" not in text:
         return None
 
-    number = first_match(r"Recibo\s*(?:№|N[°ºo.]*)?\s*(\d+)", text, re.DOTALL)
-    date = first_match(r"FECHA:\s*(\d{1,2}/\d{1,2}/\d{4})", text)
+    number = first_match(r"Recibo\s*(?:№|N[°ºo.e]*)?\s*(\d+)", text, re.DOTALL)
+    date = first_match(
+        r"FECHA:\s*(\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\s+de\s+[A-Za-záéíóúñ.]+\s+de\s+\d{4}(?:[^\n]*)?)",
+        text,
+        re.IGNORECASE,
+    )
     customer_number = first_match(r"NÚMERO DE CLIENTE:\s*(\d+)", text)
     if not (number and date and customer_number):
-        number = number or first_match(r"\bNo\s+(\d+)", text, re.IGNORECASE)
+        number = number or first_match(r"\bN[eo]\s+(\d+)", text, re.IGNORECASE)
     if not (number and date and customer_number):
         return None
 
@@ -333,10 +347,14 @@ def parse_godaddy_ocr_receipt_ocr(ocr_text):
     if "Recibo" not in text or "GoDaddy" not in text:
         return None
 
-    number = first_match(r"\bNo\s+(\d+)", text, re.IGNORECASE) or first_match(
-        r"Recibo\s*(?:№|N[°ºo.]*)?\s*(\d+)", text, re.DOTALL
+    number = first_match(r"\bN[eo]\s+(\d+)", text, re.IGNORECASE) or first_match(
+        r"Recibo\s*(?:№|N[°ºo.e]*)?\s*(\d+)", text, re.DOTALL
     )
-    date = first_match(r"FECHA:\s*(\d{1,2}/\d{1,2}/\d{4})", text)
+    date = first_match(
+        r"FECHA:\s*(\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\s+de\s+[A-Za-záéíóúñ.]+\s+de\s+\d{4}(?:[^\n]*)?)",
+        text,
+        re.IGNORECASE,
+    )
     customer_number = first_match(r"N\S*MERO DE CLIENTE:\s*(\d+)", text, re.IGNORECASE)
     if not (number and date and customer_number):
         return None
@@ -1045,6 +1063,90 @@ def parse_loose_arca_cae_ocr(text):
     return normalize_invoice_json(parsed)
 
 
+def parse_osde_debit_note_ocr(text):
+    upper_text = text.upper()
+    if "OSDE" not in upper_text or "NOTA DE D" not in upper_text:
+        return None
+
+    numbers = re.search(r"Nota de d\S*bito:\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+    code = first_match(r"C[oó]digo:\s*(\d+)", text, re.IGNORECASE)
+    issue_date = first_match(r"Fecha de emisi\S*n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    provider_cuit = first_match(r"CUIT:\s*(\d{2}-\d{8}-\d)", text, re.IGNORECASE)
+    receiver_cuit = first_match(r"CUIL/CUIT:\s*(\d{2}-\d{8}-\d|\d{11})", text, re.IGNORECASE)
+    subtotal = parse_money(first_match(r"Neto Gravado\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+    iva_total = parse_money(first_match(r"IVA Inscripto\s*10,?50%\s*\$\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    total = parse_money(first_match(r"Total\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+    cae = first_match(r"CAE:\s*(\d{14})", text, re.IGNORECASE)
+    due_date = parse_document_date(
+        first_match(r"FECHA DE VENCIMIENTO:\s*(\d{1,2}[./]\d{1,2}[./]\d{4})", text, re.IGNORECASE)
+    )
+
+    if not (numbers and code and issue_date and total is not None):
+        return None
+
+    tributos = []
+    tributos_total = 0.0
+    for description, amount in re.findall(r"((?:IIBB|118B)[^\n$]*)\$\s*([\d.,]+)", text, re.IGNORECASE):
+        value = parse_money(amount)
+        if value:
+            tributos_total = round_money(tributos_total + value)
+            tributos.append(
+                {
+                    "codigo": 99,
+                    "descripcion": " ".join(description.split()),
+                    "base_imponible": subtotal,
+                    "alicuota": None,
+                    "importe": value,
+                }
+            )
+    if not tributos_total:
+        tributos_total = parse_money(first_match(r"Percepci\S*n\s*\$\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+
+    point_of_sale = numbers.group(1).zfill(5)
+    receipt_number = numbers.group(2).zfill(8)
+    iva = []
+    if iva_total:
+        iva.append({"codigo": 4, "descripcion": "10.5%", "base_imponible": subtotal, "importe": iva_total})
+
+    parsed = {
+        "tipo_comprobante": "Nota de débito A" if int(code) == 2 else "Nota de débito",
+        "codigo_comprobante": int(code),
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_document_date(issue_date),
+        "emisor": {
+            "nombre": "OSDE",
+            "cuit": provider_cuit,
+            "doc_tipo": 80 if provider_cuit else None,
+            "doc_nro": digits(provider_cuit),
+            "condicion_iva": "IVA Responsable Inscripto",
+        },
+        "receptor": {
+            "nombre": "CS TECH CONSULTING SA" if "CS TECH CONSULTING" in upper_text else None,
+            "cuit": receiver_cuit,
+            "doc_tipo": 80 if receiver_cuit else None,
+            "doc_nro": digits(receiver_cuit),
+            "condicion_iva": "IVA Responsable Inscripto" if receiver_cuit else None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_total,
+        "tributos_total": tributos_total,
+        "impuestos": round_money((iva_total or 0) + (tributos_total or 0)),
+        "total": total,
+        "cae": cae,
+        "fecha_vencimiento_cae": due_date,
+        "iva": iva,
+        "tributos": tributos,
+        "items": [],
+    }
+    return normalize_invoice_json(parsed)
+
+
 def parse_loose_arca_service_ocr(text):
     if "FACTURA" not in text.upper():
         return None
@@ -1082,22 +1184,31 @@ def parse_loose_arca_service_ocr(text):
         due_date = parse_ar_date(first_match(r"VTO:\s*(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE))
     else:
         provider_name = "TELECOM ARGENTINA S.A."
-        provider_cuit = first_match(r"C\.U\.I\.T:\s*(\d{2}-\d{8}-\d)", text, re.IGNORECASE)
-        issue_date = first_match(r"Fecha de Emisi\S*n\s*(\d{2}/\d{2}/\d{4})", text, re.IGNORECASE)
-        receiver_name = first_match(r"([A-Z ]*TECH CONSULTING SA[^\n]*)", text)
-        receiver_cuit = first_match(r"cu\w*no:\s*(\d{2}-\d{8}-\d)", text, re.IGNORECASE)
-        subtotal = parse_money(first_match(r"Total Factura\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
-        iva_total = parse_money(first_match(r"L\S*V\.A\.\s*21%\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+        provider_cuit = first_match(r"C\.U\.I\.T\.?:\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
+        issue_date = (
+            first_match(r"Fecha de Emisi\S*n\s*:?\s*(\d{2}[/-]\d{2}[/-]\d{4})", text, re.IGNORECASE)
+            or first_match(r"\bFECHA:\s*(\d{2}[/-]\d{2}[/-]\d{4})", text, re.IGNORECASE)
+        )
+        receiver_name = "CS TECH CONSULTING SA" if re.search(r"CS\s+TECH\s+CONSULTING\s+SA|TECH\s+CONSULTING\s+SA\s+CS", text, re.IGNORECASE) else None
+        receiver_cuit = first_match(r"CUIT\s*N\S*:\s*(\d{2}-\d{8}-\d)", text, re.IGNORECASE)
+        subtotal = parse_money(first_match(r"Neto Gravado Subtotal\s*([\d.,]+)", text, re.IGNORECASE))
+        iva_total = parse_money(first_match(r"(?:I|L)\S*V\.A\.\s*21%\s*([\d.,]+)", text, re.IGNORECASE) or 0)
         tributos_total = 0.0
-        for amount in re.findall(r"(?:PERCEP\. IIBB|Percep\. IVA)[^\d-]*([\d.,]+)", text, re.IGNORECASE):
+        for amount in re.findall(r"(?:PERCEP\. IIBB|Percep\. IVA)[^\n\d-]*([\d.,]+)", text, re.IGNORECASE):
             tributos_total = round_money(tributos_total + (parse_money(amount) or 0))
-        total = parse_money(first_match(r"TOTAL A PAGAR\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+        total = (
+            parse_money(first_match(r"Total Factura\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+            or parse_money(first_match(r"TOTAL A PAGAR\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+        )
         barcode = re.search(r"(\d{11})01(\d{4})(\d{14})(\d{8})", text)
-        cae = barcode.group(3) if barcode else None
+        cae = barcode.group(3) if barcode else first_match(r"CAE\s*Nro:\s*(\d{14})", text, re.IGNORECASE)
         due_date = None
         if barcode:
             due_raw = barcode.group(4)
             due_date = f"{due_raw[:4]}-{due_raw[4:6]}-{due_raw[6:]}"
+        else:
+            due_date_value = first_match(r"Fecha Vto:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+            due_date = parse_document_date(due_date_value) if due_date_value else None
 
     if not (issue_date and total is not None):
         return None
@@ -1112,7 +1223,7 @@ def parse_loose_arca_service_ocr(text):
         "punto_venta": point_of_sale,
         "numero_comprobante": receipt_number,
         "numero_factura": number,
-        "fecha_emision": parse_ar_date(issue_date),
+        "fecha_emision": parse_document_date(issue_date),
         "emisor": {
             "nombre": provider_name,
             "cuit": provider_cuit,
@@ -1224,6 +1335,10 @@ def parse_structured_arca_ocr(ocr_text):
         return None
 
     text = "\n".join(lines)
+    osde_debit_note = parse_osde_debit_note_ocr(text)
+    if osde_debit_note is not None:
+        return osde_debit_note
+
     loose_arca = parse_loose_arca_service_ocr(text)
     if loose_arca is not None:
         return loose_arca
