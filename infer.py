@@ -70,9 +70,112 @@ EXTERNAL_PARTY_KEYS = ("name", "business_name", "tax_id", "vat_number", "address
 EXTERNAL_DOCUMENT_INFO_KEYS = ("title", "number", "date", "account_number", "customer_number", "status")
 EXTERNAL_PAYMENT_KEYS = ("method", "card_brand", "card_last4", "amount")
 EXTERNAL_ITEM_KEYS = ("description", "quantity", "unit_price", "amount", "term", "reference")
+MODEL_OCR_MAX_CHARS = 7000
+MODEL_CONTEXT_RADIUS = 2
+MODEL_CONTEXT_KEYWORDS = (
+    "archivo",
+    "factura",
+    "nota de credito",
+    "nota de debito",
+    "invoice",
+    "receipt",
+    "recibo",
+    "comprobante",
+    "punto de venta",
+    "comp.nro",
+    "comp. nro",
+    "numero",
+    "number",
+    "fecha",
+    "date",
+    "due",
+    "venc",
+    "cae",
+    "cuit",
+    "cuil",
+    "doc",
+    "tax",
+    "iva",
+    "vat",
+    "responsable",
+    "razon social",
+    "cliente",
+    "customer",
+    "facturar a",
+    "bill to",
+    "supplier",
+    "provider",
+    "emisor",
+    "receptor",
+    "subtotal",
+    "neto",
+    "gravado",
+    "impuesto",
+    "tributo",
+    "percepcion",
+    "taxes",
+    "fees",
+    "total",
+    "saldo",
+    "balance",
+    "paid",
+    "pago",
+    "moneda",
+    "currency",
+    "usd",
+    "ars",
+    "pesos",
+    "dolares",
+    "$",
+    "producto",
+    "descripcion",
+    "description",
+    "cantidad",
+    "quantity",
+    "importe",
+    "amount",
+)
+
+
+def compact_ocr_for_model(ocr_text, max_chars=MODEL_OCR_MAX_CHARS):
+    lines = [line.strip() for line in str(ocr_text).splitlines() if line.strip()]
+    text = "\n".join(lines)
+    if len(text) <= max_chars:
+        return text
+
+    selected = set()
+    lower_lines = [line.lower() for line in lines]
+
+    for index in range(min(35, len(lines))):
+        selected.add(index)
+    for index in range(max(0, len(lines) - 45), len(lines)):
+        selected.add(index)
+
+    for index, line in enumerate(lower_lines):
+        if any(keyword in line for keyword in MODEL_CONTEXT_KEYWORDS):
+            start = max(0, index - MODEL_CONTEXT_RADIUS)
+            end = min(len(lines), index + MODEL_CONTEXT_RADIUS + 1)
+            selected.update(range(start, end))
+
+    compact_lines = []
+    previous_index = None
+    for index in sorted(selected):
+        if previous_index is not None and index > previous_index + 1:
+            compact_lines.append("[...]")
+        compact_lines.append(lines[index])
+        previous_index = index
+
+    compact = "\n".join(compact_lines)
+    if len(compact) <= max_chars:
+        return compact
+
+    head_budget = max_chars // 2
+    tail_budget = max_chars - head_budget - len("\n[...]\n")
+    return compact[:head_budget].rstrip() + "\n[...]\n" + compact[-tail_budget:].lstrip()
 
 
 def build_prompt(ocr_text, instruction=DEFAULT_INSTRUCTION):
+    ocr_text = compact_ocr_for_model(ocr_text)
     return f"""### Instruccion:
 {instruction}
 
