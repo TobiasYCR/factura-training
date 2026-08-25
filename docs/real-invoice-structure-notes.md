@@ -2,18 +2,17 @@
 
 ## 1. Objetivo
 
-Este documento resume las familias de documentos reales que aparecieron durante las pruebas y como debe tratarlas el sistema.
+Este documento resume las familias de documentos reales que aparecieron durante las pruebas y como las trata el sistema.
 
 Sirve para decidir:
 
 - que parser usar;
 - que schema devolver;
-- que casos conviene sumar al dataset;
-- que documentos no deben forzarse al schema ARCA.
+- que schema devuelve cada familia.
 
 ## 2. Clasificacion general
 
-El sistema debe clasificar primero el documento:
+El sistema clasifica el documento:
 
 1. `arca_invoice`: factura/nota ARCA local.
 2. `external_provider_receipt`: recibo de proveedor externo.
@@ -67,7 +66,7 @@ Algunas facturas vienen en 3 paginas:
 2. DUPLICADO.
 3. TRIPLICADO.
 
-La informacion se repite, por lo que el extractor debe:
+La informacion se repite. El extractor:
 
 - tomar una sola version de los datos;
 - deduplicar items repetidos;
@@ -100,7 +99,7 @@ Salida:
 external_provider_receipt
 ```
 
-Decision:
+Tratamiento actual:
 
 - No forzar GoDaddy al schema ARCA.
 - Mantener schema externo.
@@ -132,7 +131,7 @@ Salida:
 external_provider_invoice
 ```
 
-Decision:
+Tratamiento actual:
 
 - Mantener schema externo.
 - No convertir moneda o impuestos si el documento no lo informa.
@@ -162,7 +161,7 @@ Salida:
 schema ARCA normalizado
 ```
 
-Decision:
+Tratamiento actual:
 
 - Tratarlo como ARCA si contiene numeracion, CUIT, CAE y totales compatibles.
 - Soportar `Nota de debito A` cuando corresponda.
@@ -177,7 +176,7 @@ Pueden aparecer como:
 - constancia de credito fiscal;
 - detalle no fiscal.
 
-Decision:
+Tratamiento actual:
 
 - Si tiene CAE y datos ARCA, usar schema ARCA.
 - Si es recibo o detalle sin CAE, usar schema externo o marcar como desconocido.
@@ -187,7 +186,7 @@ Decision:
 
 En algunos casos aparecen comprobantes de credito fiscal o facturas de transporte.
 
-Decision:
+Tratamiento actual:
 
 - Si trae estructura fiscal, extraer como ARCA.
 - Si es comprobante externo, usar schema externo.
@@ -212,7 +211,7 @@ Salida:
 external_provider_invoice
 ```
 
-Decision:
+Tratamiento actual:
 
 - No forzar a ARCA si no tiene CAE y estructura local.
 - Extraer proveedor, comprador, documento, moneda, total e items si estan claros.
@@ -221,7 +220,7 @@ Decision:
 
 Algunas facturas de hardware tienen estructura ARCA pero layout distinto.
 
-Decision:
+Tratamiento actual:
 
 - Usar parser ARCA especializado si el OCR trae CUIT, CAE y totales.
 - Validar numeracion y CAE.
@@ -236,7 +235,7 @@ Salida:
 external_provider_invoice
 ```
 
-Decision:
+Tratamiento actual:
 
 - Extraer numero, fecha, proveedor, comprador, moneda, total y pago.
 - No convertir a ARCA si no hay CAE.
@@ -266,19 +265,7 @@ Claves raiz:
 - `items`;
 - `notes`.
 
-## 14. Reglas para nuevos documentos
-
-Cuando aparece un formato nuevo:
-
-1. Guardar PDF, OCR y JSON si hay consentimiento.
-2. Revisar si es ARCA o externo.
-3. Si es ARCA, mapearlo a `docs/arca-schema.md`.
-4. Si es externo, mapearlo al schema externo.
-5. Si falla seguido, crear o mejorar parser.
-6. Sumar ejemplos revisados al dataset.
-7. Reentrenar solo si el parser no alcanza o si se quiere mejorar fallback.
-
-## 15. Casos que no deben inventarse
+## 14. Valores no inventados
 
 No inventar:
 

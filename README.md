@@ -18,12 +18,10 @@ PDF / imagen
 -> JSON final
 ```
 
-## 2. Documentacion principal
-
-Leer en este orden:
+## 2. Documentacion
 
 1. `RUNBOOK.md`: manual operativo completo.
-2. `docs/production-readiness.md`: despliegue, API, seguridad y piloto.
+2. `docs/production-readiness.md`: despliegue, API, seguridad y logs.
 3. `docs/arca-schema.md`: schema JSON para comprobantes ARCA.
 4. `docs/real-invoice-structure-notes.md`: formatos reales soportados.
 
@@ -81,11 +79,9 @@ Resumen de errores:
 python scripts/analyze_eval_results.py data/eval_results_production.jsonl
 ```
 
-## 6. Produccion
+## 6. API y despliegue
 
-Para piloto/produccion usar API key, logs y OCR local.
-
-La guia completa esta en:
+La guia de API, despliegue, variables de entorno y logs esta en:
 
 ```text
 docs/production-readiness.md

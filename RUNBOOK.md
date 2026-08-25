@@ -28,11 +28,11 @@ La idea de produccion es usar el pipeline completo, porque es mas rapido, mas ba
 - `scripts/build_real_dataset.py`: arma `real_train.jsonl` y `real_eval.jsonl`.
 - `scripts/evaluate_real_dataset.py`: evalua el LoRA puro o el flujo production.
 - `scripts/analyze_eval_results.py`: resume errores, campos flojos y casos prioritarios.
-- `docs/production-readiness.md`: checklist de piloto/produccion.
+- `docs/production-readiness.md`: despliegue, API, seguridad y logs.
 - `docs/arca-schema.md`: schema ARCA usado por el extractor.
 - `docs/real-invoice-structure-notes.md`: formatos reales analizados.
 
-## 3. Flujo recomendado de trabajo
+## 3. Flujo operativo
 
 1. Subir o copiar PDFs a la maquina donde se van a procesar.
 2. Ejecutar batch para extraer OCR y JSON.
@@ -101,7 +101,7 @@ True
 NVIDIA GeForce RTX 4050 Laptop GPU
 ```
 
-Si aparece `python: command not found`, falta activar conda o estas fuera del entorno correcto.
+Si aparece `python: command not found`, el entorno conda no esta activo o la terminal esta fuera del entorno esperado.
 
 ## 6. Instalar OCR local
 
@@ -147,7 +147,7 @@ python scripts/batch_extract_pdfs.py <INPUT_DOCUMENTS_DIR> \
   --write-json
 ```
 
-Cambiar `jpg` por `jpeg` o `png` si hace falta.
+Para otros formatos, usar `jpeg` o `png` en el parametro `--pattern`.
 
 Para reintentar solo los fallidos:
 
@@ -314,7 +314,7 @@ Si el path tiene espacios, igual se deja todo el argumento `file=@...` entre com
 
 ## 15. Desplegar en VPS
 
-La VPS sin GPU puede correr OCR + parsers + validacion. Qwen LoRA conviene dejarlo en GPU o como servicio separado.
+La VPS sin GPU corre OCR + parsers + validacion. Qwen LoRA se ejecuta cuando el servicio tiene entorno con GPU y dependencias de modelo.
 
 Instalacion minima:
 
@@ -360,40 +360,34 @@ docker run --rm -p 8000:8000 \
   factura-training-api
 ```
 
-## 17. Guardar documentos de usuarios
+## 17. Logs y documentos de usuarios
 
-No se debe autoentrenar en caliente.
+El sistema actual registra logs de extraccion cuando `FACTURA_LOG_FILE` esta definido.
 
-Flujo correcto:
+El log guarda:
 
-1. Usuario sube PDF.
-2. Sistema extrae OCR y JSON.
-3. Se guarda resultado, errores y confianza.
-4. Casos dudosos van a revision.
-5. Solo documentos autorizados y revisados entran al dataset.
-6. Se reentrena una version nueva.
+- `request_id`;
+- estado `ok`;
+- fuente usada;
+- confianza;
+- errores;
+- metadata del input;
+- tipo de documento detectado.
 
-Esto evita aprender errores propios o guardar datos sensibles sin control.
+El sistema actual no guarda PDFs completos ni OCR completo en el log. Tampoco reentrena automaticamente con documentos subidos.
 
-## 18. Cuando considerar listo el sistema
+## 18. Estado del sistema
 
-Para piloto interno:
+Componentes disponibles:
 
-- API funcionando.
-- OCR local funcionando.
-- `production` con schema OK cercano a 100%.
-- Tiempo promedio menor a 10 segundos por PDF.
-- Logs activos.
-- API key activa.
-- Web conectada a `/extract`.
-
-Para produccion final:
-
-- Politica de privacidad y retencion definida.
-- Monitoreo de errores.
-- Dataset/versiones respaldadas.
-- Proceso de mejora con revision humana.
-- Pruebas con documentos reales de usuarios.
+- API HTTP.
+- OCR local.
+- Parsers de documentos conocidos.
+- Validacion de JSON.
+- Evaluacion de dataset real.
+- Entrenamiento LoRA.
+- Logs JSONL opcionales.
+- Dockerfile para API liviana.
 
 ## 19. Problemas comunes
 
@@ -442,7 +436,7 @@ X-API-Key: <API_KEY>
 
 Revisar si el proceso esta escuchando en `0.0.0.0`, firewall, puerto abierto o usar tunel SSH.
 
-## 20. Flujo Git recomendado
+## 20. Flujo Git
 
 En local/Codex:
 

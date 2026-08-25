@@ -142,7 +142,7 @@ No usar `ARS` para facturas ARCA si se apunta a compatibilidad con ARCA.
 
 ## 10. Fechas
 
-Todas las fechas deben salir en formato ISO:
+Todas las fechas salen en formato ISO:
 
 ```text
 YYYY-MM-DD
@@ -171,17 +171,17 @@ Ejemplo:
 }
 ```
 
-## 12. Validaciones
+## 12. Validaciones actuales
 
-Validaciones que deben vivir en codigo:
+Validaciones implementadas o usadas por el pipeline:
 
-- El JSON debe contener todas las claves del schema.
-- Fechas deben tener formato ISO valido.
-- CUIT debe tener formato `00-00000000-0`.
-- CAE, si aparece, debe ser numerico y normalmente de 14 digitos.
-- `numero_factura` debe respetar `00000-00000000`.
-- Importes deben ser numeros o `null`.
-- Arrays deben existir aunque esten vacios.
+- El JSON contiene todas las claves del schema.
+- Fechas en formato ISO valido.
+- CUIT en formato `00-00000000-0`.
+- CAE numerico cuando aparece.
+- `numero_factura` en formato `00000-00000000`.
+- Importes como numeros o `null`.
+- Arrays presentes aunque esten vacios.
 
 ## 13. Ejemplo completo
 
@@ -224,9 +224,9 @@ Validaciones que deben vivir en codigo:
 }
 ```
 
-## 14. Guia para entrenamiento
+## 14. Formato usado en entrenamiento
 
-Cada ejemplo de entrenamiento debe enseñar valores limpios:
+Los ejemplos de entrenamiento usan valores limpios:
 
 - Bien: `"numero_factura": "00008-00009123"`.
 - Mal: `"numero_factura": "Comp. Nro: 0008-00009123"`.
@@ -235,4 +235,4 @@ Cada ejemplo de entrenamiento debe enseñar valores limpios:
 - Bien: `"moneda": "PES"`.
 - Mal: `"moneda": "ARS"` para ARCA.
 
-El modelo puede recibir OCR con ruido, pero la salida esperada siempre debe estar normalizada.
+El modelo recibe OCR con ruido y la salida esperada queda normalizada.

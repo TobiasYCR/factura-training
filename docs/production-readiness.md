@@ -1,4 +1,4 @@
-# Guia de piloto y produccion
+# Guia de API y despliegue
 
 ## 1. Que se despliega
 
@@ -14,21 +14,18 @@ PDF o imagen
 -> JSON final
 ```
 
-La VPS sin GPU puede correr OCR + parsers + validacion. El fallback con Qwen conviene correrlo en una maquina con GPU o dejarlo desactivado en la VPS liviana.
+La VPS sin GPU corre OCR + parsers + validacion. El fallback con Qwen LoRA requiere entorno con dependencias de modelo y GPU para tiempos bajos.
 
-## 2. Estado actual recomendado
+## 2. Componentes disponibles
 
-El proyecto ya esta en condiciones de piloto interno si se usa el flujo `production`.
+El proyecto incluye:
 
-Para produccion final todavia falta:
-
-1. Conectar la web real a `POST /extract`.
-2. Activar API key.
-3. Activar logs.
-4. Medir tiempos con PDFs reales.
-5. Revisar politica de privacidad y retencion.
-6. Definir como se revisan errores.
-7. Versionar datasets y modelos.
+1. API HTTP en `api.py`.
+2. OCR local en `ocr.py`.
+3. Parsers y validadores en `infer.py`.
+4. Logs JSONL opcionales.
+5. Dockerfile para API liviana.
+6. Configuracion por variables de entorno.
 
 ## 3. Variables de entorno
 
@@ -56,7 +53,7 @@ Significado:
 
 ## 4. Seguridad de API
 
-Si `FACTURA_API_KEY` esta definida, cada request a `/extract` debe enviar:
+Si `FACTURA_API_KEY` esta definida, cada request a `/extract` usa:
 
 ```text
 X-API-Key: <API_KEY>
@@ -229,24 +226,19 @@ Incluye:
 
 No guarda PDF ni OCR completo.
 
-## 11. Privacidad y aprendizaje con documentos reales
+## 11. Logs y documentos reales
 
-No conviene autoentrenar en caliente con documentos subidos por usuarios.
+El sistema actual no autoentrena con documentos subidos por usuarios.
 
-Flujo correcto:
+Con `FACTURA_LOG_FILE` definido, el sistema guarda un log por request con metadata operativa.
 
-1. Usuario sube documento.
-2. Sistema extrae JSON.
-3. Se guarda log.
-4. Casos dudosos van a revision.
-5. Solo documentos autorizados y revisados se suman al dataset.
-6. Se reentrena una version nueva.
+El log no incluye PDF completo ni OCR completo.
 
-Antes de guardar PDFs reales, definir consentimiento, retencion y acceso interno.
+Los datasets de entrenamiento se construyen con `scripts/build_real_dataset.py` a partir de archivos OCR/JSON ya procesados.
 
-## 12. Medicion para piloto
+## 12. Medicion
 
-Medir:
+Metricas disponibles:
 
 - tiempo promedio por PDF;
 - porcentaje `ok=true`;
@@ -262,26 +254,30 @@ python scripts/evaluate_real_dataset.py --eval-file data/real_eval.jsonl --mode 
 python scripts/analyze_eval_results.py data/eval_results_production.jsonl
 ```
 
-## 13. Criterio de piloto
+## 13. Evaluacion del pipeline
 
-El piloto interno se considera listo cuando:
+Comando para evaluar el flujo `production`:
 
-- `GET /health` responde.
-- `POST /extract` responde con API key.
-- Tesseract esta disponible.
-- `production` tiene schema OK cercano a 100%.
-- El tiempo promedio real esta por debajo de 10 segundos.
-- Hay logs activos.
-- La web puede subir PDF y recibir JSON.
+```bash
+python scripts/evaluate_real_dataset.py --eval-file data/real_eval.jsonl --mode production --out data/eval_results_production.jsonl
+```
 
-## 14. Criterio de produccion final
+Comando para analizar resultados:
 
-Produccion final requiere:
+```bash
+python scripts/analyze_eval_results.py data/eval_results_production.jsonl
+```
 
-- pruebas reales con usuarios;
-- monitoreo;
-- manejo de errores en frontend;
-- politica de privacidad;
-- backups de dataset/modelo;
-- versionado de releases;
-- proceso de reentrenamiento controlado.
+## 14. Evaluacion del LoRA
+
+Comando para evaluar Qwen LoRA puro:
+
+```bash
+python scripts/evaluate_real_dataset.py --eval-file data/real_eval.jsonl --model lora --out data/eval_results_model.jsonl
+```
+
+Comando para analizar resultados:
+
+```bash
+python scripts/analyze_eval_results.py data/eval_results_model.jsonl
+```

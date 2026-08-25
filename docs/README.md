@@ -1,9 +1,9 @@
 # Documentacion del proyecto
 
-## 1. Orden recomendado de lectura
+## 1. Indice
 
 1. `RUNBOOK.md`: manual operativo principal.
-2. `docs/production-readiness.md`: despliegue, API, seguridad y checklist.
+2. `docs/production-readiness.md`: despliegue, API, seguridad y logs.
 3. `docs/arca-schema.md`: contrato JSON para comprobantes ARCA.
 4. `docs/real-invoice-structure-notes.md`: familias de documentos reales.
 
@@ -25,7 +25,7 @@ Manual de uso diario:
 
 ### 2.2 `docs/production-readiness.md`
 
-Guia para piloto/produccion:
+Guia de API y despliegue:
 
 - variables de entorno;
 - API key;
@@ -33,8 +33,7 @@ Guia para piloto/produccion:
 - Docker;
 - systemd;
 - contrato de `/extract`;
-- privacidad;
-- criterios de cierre.
+- privacidad y logs.
 
 ### 2.3 `docs/arca-schema.md`
 
@@ -63,14 +62,6 @@ Resume formatos reales:
 - Lenovo;
 - iFastNet/WFWEF.
 
-## 3. Que falta documentar despues
+## 3. Informe Word
 
-Cuando se conecte la web real, agregar:
-
-1. URL final de la API.
-2. Como guarda la web el resultado.
-3. Manejo de errores en frontend.
-4. Politica de retencion de documentos.
-5. Procedimiento de revision humana.
-
-El informe Word se mantiene aparte y se actualiza solo cuando se defina el texto final.
+El informe Word se mantiene aparte.
