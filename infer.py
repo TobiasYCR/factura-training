@@ -2918,6 +2918,36 @@ def normalize_invoice_json(parsed):
     return normalized
 
 
+def apply_arca_document_code_hint(parsed, ocr_text):
+    if not isinstance(parsed, dict) or parsed.get("document_type"):
+        return parsed
+
+    text = str(ocr_text or "")
+    code_text = (
+        first_match(r"Archivo:.*?\b\d{10,11}_(\d{3})_\d{4,5}_\d{7,9}\.pdf", text, re.IGNORECASE)
+        or first_match(r"C[oóÓÃ³0]D\.?\s*0*(\d{1,3})", text, re.IGNORECASE)
+    )
+    if not code_text:
+        return parsed
+
+    code = int(code_text)
+    letter_by_code = {1: "A", 6: "B", 11: "C"}
+    letter = letter_by_code.get(code)
+    if not letter:
+        return parsed
+
+    normalized = dict(parsed)
+    document_kind = "Factura"
+    current_type = str(normalized.get("tipo_comprobante") or "")
+    if current_type.lower().startswith("recibo"):
+        document_kind = "Recibo"
+    elif "nota de" in current_type.lower():
+        document_kind = current_type.rsplit(" ", 1)[0]
+    normalized["tipo_comprobante"] = f"{document_kind} {letter}"
+    normalized["codigo_comprobante"] = code
+    return normalized
+
+
 def normalize_external_document(parsed):
     if not isinstance(parsed, dict):
         return parsed
@@ -2966,7 +2996,7 @@ def normalize_external_document(parsed):
 
 
 def parse_supported_document_ocr(ocr_text):
-    return (
+    parsed = (
         parse_godaddy_english_receipt_ocr(ocr_text)
         or parse_godaddy_ocr_receipt_ocr(ocr_text)
         or parse_godaddy_receipt_ocr(ocr_text)
@@ -2978,6 +3008,7 @@ def parse_supported_document_ocr(ocr_text):
         or parse_norwegian_travel_receipt_ocr(ocr_text)
         or parse_generic_external_invoice_ocr(ocr_text)
     )
+    return apply_arca_document_code_hint(parsed, ocr_text)
 
 
 def finalize_invoice_json(parsed, ocr_text=None):
