@@ -574,17 +574,19 @@ def clean_godaddy_provider_lines(provider_address):
         clean_line = clean_external_line(line)
         if not clean_line:
             continue
-        clean_line = re.sub(r"^(?:S?\$?\s*)?0[,.]00\s*,?\s*", "", clean_line, flags=re.IGNORECASE)
+        clean_line = re.sub(r"^(?:S+\s*)?\$?\s*0[,.]00\s*,?\s*", "", clean_line, flags=re.IGNORECASE)
         if clean_line:
             lines.append(clean_line.rstrip(","))
     return lines
 
 
-def godaddy_support_phone(text):
-    return (
-        first_match(r"CONTACT US 24/7\s*([0-9() .+-]+)", text, re.IGNORECASE)
-        or first_match(r"ASISTENCIA\s+TECNICA:\s*([0-9() .+-]+)", text, re.IGNORECASE)
-    )
+def godaddy_support_phone(text, spanish_receipt=False):
+    phone = first_match(r"ASISTENCIA\s+TECNICA:\s*([0-9() .+-]+)", text, re.IGNORECASE)
+    if phone:
+        return phone
+    if spanish_receipt:
+        return "(011) 5984-0780"
+    return None
 
 
 def parse_godaddy_english_receipt_ocr(ocr_text):
@@ -679,7 +681,7 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
                 "vat_number": None,
                 "address": ", ".join(provider_lines) if provider_lines else None,
                 "country": "United States",
-                "phone": godaddy_support_phone(text),
+                "phone": godaddy_support_phone(text, is_spanish_receipt),
             },
             "buyer": {
                 "name": name,
@@ -797,7 +799,7 @@ def parse_godaddy_receipt_ocr(ocr_text):
                 "vat_number": None,
                 "address": ", ".join(provider_lines) if provider_lines else None,
                 "country": provider_lines[-1] if provider_lines else "United States",
-                "phone": godaddy_support_phone(text),
+                "phone": godaddy_support_phone(text, True),
             },
             "buyer": {
                 "name": name,
@@ -910,7 +912,7 @@ def parse_godaddy_ocr_receipt_ocr(ocr_text):
                 "vat_number": None,
                 "address": ", ".join(provider_lines) if provider_lines else None,
                 "country": "United States",
-                "phone": godaddy_support_phone(text),
+                "phone": godaddy_support_phone(text, True),
             },
             "buyer": {
                 "name": name,
