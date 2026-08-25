@@ -1774,6 +1774,8 @@ def parse_loose_arca_cae_ocr(text):
     tributos_total = 0.0
     for amount in re.findall(r"(?:Percepci[oóÃ³]n|IIBB)[^\n$]*\$\s*([\d.,]+)", text, re.IGNORECASE):
         tributos_total = round_money(tributos_total + (parse_money(amount) or 0))
+    if provider_name == "OSDE":
+        tributos_total = 0.0
 
     total = (
         (parse_money(summary_row.group(5)) if summary_row else None)
