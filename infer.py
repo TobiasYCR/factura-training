@@ -568,6 +568,25 @@ def enrich_godaddy_receipt(parsed, text):
     return parsed
 
 
+def clean_godaddy_provider_lines(provider_address):
+    lines = []
+    for line in (provider_address or "").splitlines():
+        clean_line = clean_external_line(line)
+        if not clean_line:
+            continue
+        clean_line = re.sub(r"^(?:S?\$?\s*)?0[,.]00\s*,?\s*", "", clean_line, flags=re.IGNORECASE)
+        if clean_line:
+            lines.append(clean_line.rstrip(","))
+    return lines
+
+
+def godaddy_support_phone(text):
+    return (
+        first_match(r"CONTACT US 24/7\s*([0-9() .+-]+)", text, re.IGNORECASE)
+        or first_match(r"ASISTENCIA\s+TECNICA:\s*([0-9() .+-]+)", text, re.IGNORECASE)
+    )
+
+
 def parse_godaddy_english_receipt_ocr(ocr_text):
     text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
     upper_text = text.upper()
@@ -646,7 +665,8 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
         )
 
     provider_address = first_match(r"GoDaddy\.com, LLC\s*\$?\s*[\d.,]*\s*(.*?United States)", text, re.IGNORECASE | re.DOTALL)
-    provider_lines = [line.strip().rstrip(",") for line in (provider_address or "").splitlines() if line.strip()]
+    provider_lines = clean_godaddy_provider_lines(provider_address)
+    is_spanish_receipt = bool(re.search(r"\bRecibo\b", text, re.IGNORECASE))
 
     return normalize_external_document(
         enrich_godaddy_receipt(
@@ -659,7 +679,7 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
                 "vat_number": None,
                 "address": ", ".join(provider_lines) if provider_lines else None,
                 "country": "United States",
-                "phone": first_match(r"CONTACT US 24/7\s*([0-9-]+)", text, re.IGNORECASE),
+                "phone": godaddy_support_phone(text),
             },
             "buyer": {
                 "name": name,
@@ -671,7 +691,7 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
                 "phone": phone,
             },
             "document": {
-                "title": "Recibo" if re.search(r"\bRecibo\b", text, re.IGNORECASE) else "Receipt",
+                "title": "Recibo" if is_spanish_receipt else "Receipt",
                 "number": number,
                 "date": parse_document_date(date),
                 "account_number": None,
@@ -692,7 +712,9 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
                 "amount": parse_money(payment.group("amount")) if payment else None,
             },
             "items": items,
-            "notes": "GoDaddy receipt parsed from English OCR text. Not an ARCA invoice.",
+            "notes": "GoDaddy receipt parsed from OCR text. Not an ARCA invoice."
+            if is_spanish_receipt
+            else "GoDaddy receipt parsed from English OCR text. Not an ARCA invoice.",
         },
         text,
         )
@@ -733,7 +755,7 @@ def parse_godaddy_receipt_ocr(ocr_text):
         address_lines.append(line.rstrip(","))
 
     provider_address = first_match(r"GoDaddy\.com, LLC\s*(?:\$\s*[\d.,]+\s*)?(.*?)\s+Tarifas", text, re.DOTALL)
-    provider_lines = [line.strip().rstrip(",") for line in (provider_address or "").splitlines() if line.strip()]
+    provider_lines = clean_godaddy_provider_lines(provider_address)
 
     payment = re.search(r"PAGO:\s*(?P<brand>\w+)\s+.*?(?P<last4>\d{4})\s+\$\s*(?P<amount>[\d.,]+)", text, re.DOTALL)
     taxes = parse_money(first_match(r"Impuestos\s+\$\s*([\d.,]+)", text) or 0)
@@ -775,7 +797,7 @@ def parse_godaddy_receipt_ocr(ocr_text):
                 "vat_number": None,
                 "address": ", ".join(provider_lines) if provider_lines else None,
                 "country": provider_lines[-1] if provider_lines else "United States",
-                "phone": "(011) 5235-3894" if "(011) 5235-3894" in text else None,
+                "phone": godaddy_support_phone(text),
             },
             "buyer": {
                 "name": name,
@@ -875,7 +897,7 @@ def parse_godaddy_ocr_receipt_ocr(ocr_text):
             current_item["reference"] = line
 
     provider_address = first_match(r"GoDaddy\.com, LLC.*?\n(.*?United States)", text, re.DOTALL)
-    provider_lines = [line.strip().rstrip(",") for line in (provider_address or "").splitlines() if line.strip()]
+    provider_lines = clean_godaddy_provider_lines(provider_address)
 
     return normalize_external_document(
         enrich_godaddy_receipt(
@@ -888,7 +910,7 @@ def parse_godaddy_ocr_receipt_ocr(ocr_text):
                 "vat_number": None,
                 "address": ", ".join(provider_lines) if provider_lines else None,
                 "country": "United States",
-                "phone": "(011) 5984-0780" if "(011) 5984-0780" in text else None,
+                "phone": godaddy_support_phone(text),
             },
             "buyer": {
                 "name": name,
