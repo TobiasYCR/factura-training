@@ -1744,6 +1744,11 @@ def parse_loose_arca_cae_ocr(text):
         letter = (visual_header.group(1) or visual_header.group(2) or "A").upper()
         point_of_sale = visual_header.group(3).zfill(5)
         receipt_number = visual_header.group(4).zfill(8)
+    elif filename_number:
+        document_code = int(filename_number.group(1))
+        letter = "A" if document_code == 1 else "B" if document_code == 6 else "C" if document_code == 11 else "A"
+        point_of_sale = filename_number.group(2).zfill(5)
+        receipt_number = filename_number.group(3).zfill(8)
     elif visual_no_letter and re.search(r"C[oó]d\.?\s*0?1|IVA\s+(?:Responsable\s+)?Inscripto", text, re.IGNORECASE):
         letter = "A"
         point_of_sale = visual_no_letter.group(1).zfill(5)
@@ -1752,11 +1757,6 @@ def parse_loose_arca_cae_ocr(text):
         letter = "A"
         point_of_sale = bare_number.group(1).zfill(5)
         receipt_number = bare_number.group(2).zfill(8)
-    elif filename_number:
-        document_code = int(filename_number.group(1))
-        letter = "A" if document_code == 1 else "B" if document_code == 6 else "C" if document_code == 11 else "A"
-        point_of_sale = filename_number.group(2).zfill(5)
-        receipt_number = filename_number.group(3).zfill(8)
     elif numbers:
         letter = "A" if re.search(r"IVA\s+(?:Responsable\s+)?Inscripto|IVA\s+10\.?5%|IVA\s+21%", text, re.IGNORECASE) else "C"
         point_of_sale = numbers.group(1).zfill(5)
