@@ -1766,6 +1766,14 @@ def parse_loose_arca_cae_ocr(text):
     if len(receipt_number) > 8 and receipt_number.startswith("0"):
         receipt_number = receipt_number[-8:]
 
+    explicit_code = document_code
+    text_code = first_match(r"C[oóÓÃ³0]D\.?\s*0*(\d{1,3})", text, re.IGNORECASE)
+    if explicit_code is None and text_code and int(text_code) in {1, 6, 11}:
+        explicit_code = int(text_code)
+    if explicit_code in {1, 6, 11}:
+        document_code = explicit_code
+        letter = "A" if explicit_code == 1 else "B" if explicit_code == 6 else "C"
+
     cae = barcode.group(4) if barcode else first_match(r"CAE\S*:\s*(\d{13,14})", text, re.IGNORECASE)
     if cae and len(cae) != 14:
         cae = None
