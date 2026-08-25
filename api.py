@@ -238,6 +238,7 @@ def should_run_model(parsed, errors, use_model, model_policy, confidence, min_co
 
 def extract_document(
     ocr_text,
+    filename=None,
     use_model=False,
     model_choice="lora",
     max_new_tokens=900,
@@ -246,7 +247,8 @@ def extract_document(
 ):
     started = time.perf_counter()
     raw_model_response = None
-    parsed = parse_supported_document_ocr(ocr_text)
+    parser_text = f"Archivo: {filename}\n{ocr_text}" if filename else ocr_text
+    parsed = parse_supported_document_ocr(parser_text)
     extraction_source = "parser" if parsed is not None else None
     model_name = None
     initial_errors = validate_extracted_document_json(parsed) if parsed is not None else []
@@ -260,7 +262,7 @@ def extract_document(
         model_name, (model, tokenizer) = get_model(model_choice)
         raw_model_response = generate_with_loaded_model(model, tokenizer, ocr_text, max_new_tokens)
         model_parsed, _ = extract_json(raw_model_response)
-        parsed = finalize_invoice_json(model_parsed, ocr_text)
+        parsed = finalize_invoice_json(model_parsed, parser_text)
         extraction_source = "model"
         model_errors = validate_extracted_document_json(parsed)
         model_confidence = calculate_confidence(parsed, model_errors, extraction_source, True)
@@ -270,7 +272,7 @@ def extract_document(
             raw_model_response = None
 
     if parsed is None:
-        parsed = finalize_invoice_json(None, ocr_text)
+        parsed = finalize_invoice_json(None, parser_text)
 
     errors = validate_extracted_document_json(parsed)
     used_model = extraction_source == "model"
@@ -326,6 +328,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             request = self.read_extract_request()
             result = extract_document(
                 request["ocr_text"],
+                filename=request["filename"],
                 use_model=request["use_model"],
                 model_choice=request["model"],
                 max_new_tokens=request["max_new_tokens"],
