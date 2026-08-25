@@ -1835,7 +1835,7 @@ def parse_osde_debit_note_ocr(text):
     filename_osde = re.search(r"Archivo:.*?Osde\s+(\d{4,5})-(\d{7,9})\.pdf", text, re.IGNORECASE)
     if "OSDE" not in upper_text and not filename_osde:
         return None
-    if "NOTA DE D" not in upper_text and not filename_osde:
+    if "NOTA DE D" not in upper_text:
         return None
 
     numbers = re.search(r"Nota de d\S*bito:\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE) or filename_osde
