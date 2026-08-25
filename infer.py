@@ -1725,7 +1725,9 @@ def parse_loose_arca_cae_ocr(text):
         re.IGNORECASE | re.DOTALL,
     )
     bare_number = re.search(r"N\S*\s*:?\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
-    filename_number = re.search(r"\b\d{10,11}_\d{3}_(\d{4,5})_(\d{7,9})\b", text)
+    filename_number = re.search(r"\b\d{10,11}_(\d{3})_(\d{4,5})_(\d{7,9})\b", text)
+    barcode = re.search(r"(\d{11})(\d{3})(\d{5})(\d{14})(\d{8})\d?", text)
+    document_code = None
     if header and len(header.groups()) == 3:
         letter = header.group(1).upper()
         point_of_sale = header.group(2).zfill(5)
@@ -1750,10 +1752,11 @@ def parse_loose_arca_cae_ocr(text):
         letter = "A"
         point_of_sale = bare_number.group(1).zfill(5)
         receipt_number = bare_number.group(2).zfill(8)
-    elif filename_number and re.search(r"FACTURA\s+A|\bA\b|IVA\s+(?:Responsable\s+)?Inscripto|RESPONSABLE INSCRIPTO", text, re.IGNORECASE):
-        letter = "A"
-        point_of_sale = filename_number.group(1).zfill(5)
-        receipt_number = filename_number.group(2).zfill(8)
+    elif filename_number:
+        document_code = int(filename_number.group(1))
+        letter = "A" if document_code == 1 else "B" if document_code == 6 else "C" if document_code == 11 else "A"
+        point_of_sale = filename_number.group(2).zfill(5)
+        receipt_number = filename_number.group(3).zfill(8)
     elif numbers:
         letter = "A" if re.search(r"IVA\s+(?:Responsable\s+)?Inscripto|IVA\s+10\.?5%|IVA\s+21%", text, re.IGNORECASE) else "C"
         point_of_sale = numbers.group(1).zfill(5)
@@ -1763,14 +1766,13 @@ def parse_loose_arca_cae_ocr(text):
     if len(receipt_number) > 8 and receipt_number.startswith("0"):
         receipt_number = receipt_number[-8:]
 
-    barcode = re.search(r"(\d{11})01(\d{4})(\d{14})(\d{8})", text)
-    cae = barcode.group(3) if barcode else first_match(r"CAE\S*:\s*(\d{13,14})", text, re.IGNORECASE)
+    cae = barcode.group(4) if barcode else first_match(r"CAE\S*:\s*(\d{13,14})", text, re.IGNORECASE)
     if cae and len(cae) != 14:
         cae = None
 
     due_date = None
     if barcode:
-        due_raw = barcode.group(4)
+        due_raw = barcode.group(5)
         due_date = f"{due_raw[:4]}-{due_raw[4:6]}-{due_raw[6:]}"
     else:
         due_value = (
@@ -1809,7 +1811,7 @@ def parse_loose_arca_cae_ocr(text):
     elif "HOKAMA" in upper_text or "HOKAMAT" in upper_text:
         provider_name = "HOKAMAT S.R.L."
     else:
-        provider_name = first_match(r"Raz[oóÃ³]n Social:\s*([^\n]+)", text)
+        provider_name = first_match(r"Raz[oóÃ³]n Social:\s*([^\n]+?)(?:\s+Fecha de Emisi[oóÃ³]n|$)", text)
 
     receiver_name = (
         first_match(r"(CS TECH CONSULTING S\.?A\.?)", text, re.IGNORECASE)
@@ -1884,7 +1886,7 @@ def parse_loose_arca_cae_ocr(text):
 
     parsed = {
         "tipo_comprobante": f"Factura {letter}",
-        "codigo_comprobante": 1 if letter == "A" else 6 if letter == "B" else 11,
+        "codigo_comprobante": document_code or (1 if letter == "A" else 6 if letter == "B" else 11),
         "punto_venta": point_of_sale,
         "numero_comprobante": receipt_number,
         "numero_factura": f"{point_of_sale}-{receipt_number}",
@@ -1894,7 +1896,7 @@ def parse_loose_arca_cae_ocr(text):
             "cuit": provider_cuit,
             "doc_tipo": 80 if provider_cuit else None,
             "doc_nro": digits(provider_cuit),
-            "condicion_iva": "IVA Responsable Inscripto" if "Responsable Inscripto" in text else None,
+            "condicion_iva": "Responsable Monotributo" if re.search(r"Responsable Monotributo", text, re.IGNORECASE) else "IVA Responsable Inscripto" if "Responsable Inscripto" in text else None,
         },
         "receptor": {
             "nombre": receiver_name.strip() if receiver_name else None,
