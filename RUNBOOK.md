@@ -48,10 +48,19 @@ La idea de produccion es usar el pipeline completo, porque es mas rapido, mas ba
 
 ## 4. Entrar a la PC con GPU
 
+Los ejemplos usan placeholders para no dejar datos personales en el repo:
+
+- `<GPU_USER>`: usuario SSH de la maquina con GPU.
+- `<GPU_HOST>`: IP, hostname o dominio de la maquina con GPU.
+- `<PROJECT_DIR>`: ruta donde esta clonado el proyecto.
+- `<INPUT_DOCUMENTS_DIR>`: carpeta con PDFs/imagenes a procesar.
+- `<API_KEY>`: clave privada de la API.
+- `<REPOSITORY_URL>`: URL del repositorio.
+
 Desde Windows:
 
 ```bash
-ssh tobias@100.96.9.102
+ssh <GPU_USER>@<GPU_HOST>
 ```
 
 Si al entrar quedas en Windows remoto, abrir WSL:
@@ -63,7 +72,7 @@ wsl
 Entrar al proyecto:
 
 ```bash
-cd /mnt/c/Users/tobias/factura-training
+cd <PROJECT_DIR>
 ```
 
 Activar entorno:
@@ -121,7 +130,7 @@ $env:TESSERACT_CMD="C:\Program Files\Tesseract-OCR\tesseract.exe"
 Para procesar PDFs en subcarpetas:
 
 ```bash
-python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/pdf2_facturas \
+python scripts/batch_extract_pdfs.py <INPUT_DOCUMENTS_DIR> \
   --pattern "**/*.pdf" \
   --output-dir data/real_invoices_analysis_pdf2_pdf \
   --write-ocr \
@@ -131,7 +140,7 @@ python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/pdf2_facturas \
 Para procesar imagenes:
 
 ```bash
-python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/pdf2_facturas \
+python scripts/batch_extract_pdfs.py <INPUT_DOCUMENTS_DIR> \
   --pattern "**/*.jpg" \
   --output-dir data/real_invoices_analysis_pdf2_jpg \
   --write-ocr \
@@ -143,7 +152,7 @@ Cambiar `jpg` por `jpeg` o `png` si hace falta.
 Para reintentar solo los fallidos:
 
 ```bash
-python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/pdf2_facturas \
+python scripts/batch_extract_pdfs.py <INPUT_DOCUMENTS_DIR> \
   --pattern "**/*.pdf" \
   --output-dir data/real_invoices_analysis_pdf2_pdf \
   --failed-from data/real_invoices_analysis_pdf2_pdf/batch_summary.jsonl \
@@ -252,7 +261,7 @@ python api.py --host 127.0.0.1 --port 8000
 Con API key y logs:
 
 ```bash
-FACTURA_API_KEY="cambiar-esta-clave" \
+FACTURA_API_KEY="<API_KEY>" \
 FACTURA_LOG_FILE="$PWD/logs/extractions.jsonl" \
 python api.py --host 0.0.0.0 --port 8000
 ```
@@ -267,7 +276,7 @@ Extraer PDF:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true" \
-  -H "X-API-Key: cambiar-esta-clave" \
+  -H "X-API-Key: <API_KEY>" \
   -F "file=@factura.pdf"
 ```
 
@@ -277,7 +286,7 @@ En una PC con GPU:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true&use_model=true&model=lora&model_policy=low_confidence&min_confidence=0.82" \
-  -H "X-API-Key: cambiar-esta-clave" \
+  -H "X-API-Key: <API_KEY>" \
   -F "file=@factura.pdf"
 ```
 
@@ -292,13 +301,13 @@ Politicas:
 En `cmd.exe`:
 
 ```cmd
-curl.exe -X POST "http://127.0.0.1:8000/extract?force_ocr=true" -F "file=@C:\Users\Tobias\Desktop\factura.pdf"
+curl.exe -X POST "http://127.0.0.1:8000/extract?force_ocr=true" -F "file=@C:\RUTA\A\factura.pdf"
 ```
 
 Con API key:
 
 ```cmd
-curl.exe -X POST "http://127.0.0.1:8000/extract?force_ocr=true" -H "X-API-Key: cambiar-esta-clave" -F "file=@C:\Users\Tobias\Desktop\factura.pdf"
+curl.exe -X POST "http://127.0.0.1:8000/extract?force_ocr=true" -H "X-API-Key: <API_KEY>" -F "file=@C:\RUTA\A\factura.pdf"
 ```
 
 Si el path tiene espacios, igual se deja todo el argumento `file=@...` entre comillas.
@@ -310,7 +319,7 @@ La VPS sin GPU puede correr OCR + parsers + validacion. Qwen LoRA conviene dejar
 Instalacion minima:
 
 ```bash
-git clone https://github.com/TobiasYCR/factura-training.git
+git clone <REPOSITORY_URL>
 cd factura-training
 python3 -m venv .venv
 source .venv/bin/activate
@@ -322,7 +331,7 @@ sudo apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng popple
 Ejecutar:
 
 ```bash
-FACTURA_API_KEY="cambiar-esta-clave" \
+FACTURA_API_KEY="<API_KEY>" \
 FACTURA_LOG_FILE="$PWD/logs/extractions.jsonl" \
 python api.py --host 0.0.0.0 --port 8000
 ```
@@ -345,7 +354,7 @@ Ejecutar:
 
 ```bash
 docker run --rm -p 8000:8000 \
-  -e FACTURA_API_KEY="cambiar-esta-clave" \
+  -e FACTURA_API_KEY="<API_KEY>" \
   -e FACTURA_LOG_FILE="/app/logs/extractions.jsonl" \
   -v "$PWD/logs:/app/logs" \
   factura-training-api
@@ -426,7 +435,7 @@ sudo apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng popple
 Falta header:
 
 ```text
-X-API-Key: cambiar-esta-clave
+X-API-Key: <API_KEY>
 ```
 
 ### 19.6 VPS no responde desde afuera
@@ -446,6 +455,6 @@ git push
 En GPU/VPS:
 
 ```bash
-cd /mnt/c/Users/tobias/factura-training
+cd <PROJECT_DIR>
 git pull
 ```

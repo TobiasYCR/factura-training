@@ -32,8 +32,14 @@ Para produccion final todavia falta:
 
 ## 3. Variables de entorno
 
+Los ejemplos usan placeholders para evitar publicar datos sensibles:
+
+- `<API_KEY>`: clave privada usada por la web/backend para llamar a la API.
+- `<SERVICE_USER>`: usuario Linux que ejecuta el servicio.
+- `<PROJECT_DIR>`: ruta absoluta del proyecto en el servidor.
+
 ```bash
-FACTURA_API_KEY="cambiar-esta-clave"
+FACTURA_API_KEY="<API_KEY>"
 FACTURA_LOG_FILE="/var/log/factura-training/extractions.jsonl"
 FACTURA_MAX_UPLOAD_MB="25"
 OCR_LANG="spa+eng"
@@ -53,7 +59,7 @@ Significado:
 Si `FACTURA_API_KEY` esta definida, cada request a `/extract` debe enviar:
 
 ```text
-X-API-Key: cambiar-esta-clave
+X-API-Key: <API_KEY>
 ```
 
 `GET /health` queda abierto para monitoreo.
@@ -62,7 +68,7 @@ Ejemplo:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true" \
-  -H "X-API-Key: cambiar-esta-clave" \
+  -H "X-API-Key: <API_KEY>" \
   -F "file=@factura.pdf"
 ```
 
@@ -87,7 +93,7 @@ pip install -r requirements-api.txt
 Levantar API:
 
 ```bash
-FACTURA_API_KEY="cambiar-esta-clave" \
+FACTURA_API_KEY="<API_KEY>" \
 FACTURA_LOG_FILE="$PWD/logs/extractions.jsonl" \
 python api.py --host 0.0.0.0 --port 8000
 ```
@@ -112,7 +118,7 @@ Ejecutar:
 
 ```bash
 docker run --rm -p 8000:8000 \
-  -e FACTURA_API_KEY="cambiar-esta-clave" \
+  -e FACTURA_API_KEY="<API_KEY>" \
   -e FACTURA_LOG_FILE="/app/logs/extractions.jsonl" \
   -e FACTURA_MAX_UPLOAD_MB="25" \
   -v "$PWD/logs:/app/logs" \
@@ -135,12 +141,12 @@ Description=Factura Training API
 After=network.target
 
 [Service]
-User=tobias
-WorkingDirectory=/home/tobias/factura-training
-Environment="FACTURA_API_KEY=cambiar-esta-clave"
-Environment="FACTURA_LOG_FILE=/home/tobias/factura-training/logs/extractions.jsonl"
+User=<SERVICE_USER>
+WorkingDirectory=<PROJECT_DIR>
+Environment="FACTURA_API_KEY=<API_KEY>"
+Environment="FACTURA_LOG_FILE=<PROJECT_DIR>/logs/extractions.jsonl"
 Environment="FACTURA_MAX_UPLOAD_MB=25"
-ExecStart=/home/tobias/factura-training/.venv/bin/python /home/tobias/factura-training/api.py --host 0.0.0.0 --port 8000
+ExecStart=<PROJECT_DIR>/.venv/bin/python <PROJECT_DIR>/api.py --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5
 
