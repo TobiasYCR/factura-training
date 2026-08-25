@@ -384,6 +384,17 @@ def first_match(pattern, text, flags=0):
     return match.group(1).strip() if match else None
 
 
+def first_money(patterns, text, flags=re.IGNORECASE):
+    for pattern in patterns:
+        match = first_match(pattern, text, flags)
+        if match is None:
+            continue
+        value = parse_money(match)
+        if value is not None:
+            return value
+    return None
+
+
 def clean_external_line(line):
     line = re.sub(r"\s+", " ", str(line)).strip(" ,;")
     return line or None
@@ -391,8 +402,8 @@ def clean_external_line(line):
 
 def extract_external_buyer_details(text):
     buyer_block = (
-        first_match(r"FACTURAR A:\s*(.*?)(?:\nPAGO:|\nPago:|\nPAYMENT:|\nSaldo|\nTotal|\nREFERENCIA)", text, re.IGNORECASE | re.DOTALL)
-        or first_match(r"BILL TO:?\s*(.*?)(?:\nPAYMENT:|\nPayment|\nPrevious Balance|\nBalance Due|\nTotal)", text, re.IGNORECASE | re.DOTALL)
+        first_match(r"FACTURAR\s+A:?\s*(.*?)(?:\nPAGO:|\nPago:|\nPAYMENT:|\nSaldo|\nTotal|\nREFERENCIA)", text, re.IGNORECASE | re.DOTALL)
+        or first_match(r"BILL\s+TO:?\s*(.*?)(?:\nPAYMENT:|\nPayment|\nPrevious Balance|\nBalance Due|\nTotal)", text, re.IGNORECASE | re.DOTALL)
         or first_match(r"Customer:\s*(.*?)(?:\nInvoice Number:|\nIssue Date:|\nDue Date:|\nQuantity|\nPayment Method)", text, re.IGNORECASE | re.DOTALL)
         or first_match(r"PARA:\s*(.*?)(?:\nFECHA|\nTOTAL|\nDETALLE|\nDESCRIPCION)", text, re.IGNORECASE | re.DOTALL)
         or first_match(r"Cliente:\s*(.*?)(?:\nFecha|\nTotal|\nDetalle|\nDescripcion)", text, re.IGNORECASE | re.DOTALL)
@@ -450,16 +461,22 @@ def merge_external_party(primary, fallback):
 
 
 def extract_external_payment_details(text, total=None):
-    paid = (
-        parse_money(first_match(r"Pago recibido\s*\(?\$?\s*([\d.,\s]+)\)?", text, re.IGNORECASE))
-        or parse_money(first_match(r"Received Payment\s*\(?\$?\s*([\d.,\s]+)\)?", text, re.IGNORECASE))
-        or parse_money(first_match(r"\bPaid\s+(?:USD|ARS|EUR)?\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
-        or parse_money(first_match(r"Pago\s*:?\s*(?:USD|ARS|EUR)?\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+    paid = first_money(
+        (
+            r"Pago recibido\s*\(?\$?\s*([\d.,\s]+)\)?",
+            r"Received Payment\s*\(?\$?\s*([\d.,\s]+)\)?",
+            r"\bPaid\s+(?:USD|ARS|EUR)?\s*\$?\s*([\d.,\s]+)",
+            r"Pago\s*:?\s*(?:USD|ARS|EUR)?\s*\$?\s*([\d.,\s]+)",
+        ),
+        text,
     )
-    balance_due = (
-        parse_money(first_match(r"Saldo adeudado\s*\([A-Z]{3}\)\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
-        or parse_money(first_match(r"Balance Due\s*(?:\([A-Z]{3}\))?\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
-        or parse_money(first_match(r"\bBalance\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+    balance_due = first_money(
+        (
+            r"Saldo adeudado\s*\([A-Z]{3}\)\s*\$?\s*([\d.,\s]+)",
+            r"Balance Due\s*(?:\([A-Z]{3}\))?\s*\$?\s*([\d.,\s]+)",
+            r"\bBalance\s*\$?\s*([\d.,\s]+)",
+        ),
+        text,
     )
     if paid is None and balance_due == 0 and total is not None:
         paid = total
@@ -510,6 +527,45 @@ def extract_generic_external_items(text):
             }
         )
     return items
+
+
+def enrich_godaddy_receipt(parsed, text):
+    buyer_details = extract_external_buyer_details(text)
+    payment_details = extract_external_payment_details(text, total=parsed.get("total"))
+    generic_items = extract_generic_external_items(text)
+
+    parsed["buyer"] = merge_external_party(parsed.get("buyer"), buyer_details)
+    document = parsed.get("document") if isinstance(parsed.get("document"), dict) else {}
+    document["customer_number"] = (
+        document.get("customer_number")
+        or first_match(r"N\S*MERO DE CLIENTE:?\s*(\d+)", text, re.IGNORECASE)
+        or first_match(r"CUSTOMER\s*#:?\s*(\d+)", text, re.IGNORECASE)
+    )
+    document["status"] = document.get("status") or payment_details["status"]
+    parsed["document"] = document
+
+    if parsed.get("paid") is None:
+        parsed["paid"] = payment_details["paid"]
+    if parsed.get("balance_due") is None:
+        parsed["balance_due"] = payment_details["balance_due"]
+    if parsed.get("paid") is None and parsed.get("balance_due") == 0 and parsed.get("total") is not None:
+        parsed["paid"] = parsed["total"]
+    if parsed.get("balance_due") is None and parsed.get("paid") is not None and parsed.get("total") is not None:
+        parsed["balance_due"] = round_money(parsed["total"] - parsed["paid"])
+    if document.get("status") is None and parsed.get("paid") is not None and parsed.get("balance_due") == 0:
+        document["status"] = "paid"
+
+    payment = parsed.get("payment") if isinstance(parsed.get("payment"), dict) else {}
+    parsed["payment"] = {
+        key: payment.get(key) if payment.get(key) is not None else payment_details["payment"].get(key)
+        for key in EXTERNAL_PAYMENT_KEYS
+    }
+    if parsed["payment"].get("amount") is None and parsed.get("paid") is not None:
+        parsed["payment"]["amount"] = parsed["paid"]
+
+    if not parsed.get("items") and generic_items:
+        parsed["items"] = generic_items
+    return parsed
 
 
 def parse_godaddy_english_receipt_ocr(ocr_text):
@@ -584,6 +640,7 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
     provider_lines = [line.strip().rstrip(",") for line in (provider_address or "").splitlines() if line.strip()]
 
     return normalize_external_document(
+        enrich_godaddy_receipt(
         {
             "document_type": "external_provider_receipt",
             "provider": {
@@ -627,7 +684,9 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
             },
             "items": items,
             "notes": "GoDaddy receipt parsed from English OCR text. Not an ARCA invoice.",
-        }
+        },
+        text,
+        )
     )
 
 
@@ -650,7 +709,7 @@ def parse_godaddy_receipt_ocr(ocr_text):
         return None
 
     buyer_block = first_match(r"FACTURAR A:\s*(.*?)\s+PAGO:", text, re.DOTALL) or ""
-    buyer_lines = [line.strip() for line in buyer_block.splitlines() if line.strip()]
+    buyer_lines = [line.strip().rstrip(",") for line in buyer_block.splitlines() if line.strip()]
     tax_id = first_match(r"ID fiscal:\s*([^\n]+)", buyer_block)
     phone = next((line for line in buyer_lines if line.startswith("+")), None)
     name = buyer_lines[0] if buyer_lines else None
@@ -662,7 +721,7 @@ def parse_godaddy_receipt_ocr(ocr_text):
         if business_name is None and line.isupper() and not any(char.isdigit() for char in line):
             business_name = line
             continue
-        address_lines.append(line)
+        address_lines.append(line.rstrip(","))
 
     provider_address = first_match(r"GoDaddy\.com, LLC\s*(?:\$\s*[\d.,]+\s*)?(.*?)\s+Tarifas", text, re.DOTALL)
     provider_lines = [line.strip().rstrip(",") for line in (provider_address or "").splitlines() if line.strip()]
@@ -697,6 +756,7 @@ def parse_godaddy_receipt_ocr(ocr_text):
             current_item["reference"] = line
 
     return normalize_external_document(
+        enrich_godaddy_receipt(
         {
             "document_type": "external_provider_receipt",
             "provider": {
@@ -740,7 +800,9 @@ def parse_godaddy_receipt_ocr(ocr_text):
             },
             "items": items,
             "notes": "GoDaddy receipt. Not an ARCA invoice.",
-        }
+        },
+        text,
+        )
     )
 
 
@@ -762,7 +824,7 @@ def parse_godaddy_ocr_receipt_ocr(ocr_text):
         return None
 
     buyer_block = first_match(r"FACTURAR A:\s*(.*?)\s+PAGO:", text, re.DOTALL) or ""
-    buyer_lines = [line.strip() for line in buyer_block.splitlines() if line.strip()]
+    buyer_lines = [line.strip().rstrip(",") for line in buyer_block.splitlines() if line.strip()]
     tax_id = first_match(r"ID fiscal:\s*([^\n]+)", buyer_block)
     phone = next((line for line in buyer_lines if line.startswith("+")), None)
     name = buyer_lines[0] if buyer_lines else None
@@ -807,6 +869,7 @@ def parse_godaddy_ocr_receipt_ocr(ocr_text):
     provider_lines = [line.strip().rstrip(",") for line in (provider_address or "").splitlines() if line.strip()]
 
     return normalize_external_document(
+        enrich_godaddy_receipt(
         {
             "document_type": "external_provider_receipt",
             "provider": {
@@ -850,7 +913,9 @@ def parse_godaddy_ocr_receipt_ocr(ocr_text):
             },
             "items": items,
             "notes": "GoDaddy receipt parsed from OCR text. Not an ARCA invoice.",
-        }
+        },
+        text,
+        )
     )
 
 
