@@ -1,28 +1,36 @@
-# Preparacion para piloto/produccion
+# Guia de piloto y produccion
 
-Este proyecto debe desplegarse como un sistema completo de extraccion:
+## 1. Que se despliega
 
-1. PDF o imagen.
-2. OCR local con Tesseract.
-3. Parsers deterministicos para formatos conocidos.
-4. Normalizacion al schema esperado.
-5. Validacion.
-6. Fallback opcional con Qwen LoRA cuando haya GPU disponible.
-7. Logs para revisar errores y mejorar el dataset.
+En produccion se despliega el sistema completo de extraccion, no Qwen solo.
 
-## Estado recomendado actual
+```text
+PDF o imagen
+-> OCR local
+-> parser/reglas
+-> normalizacion
+-> validacion
+-> fallback Qwen LoRA opcional
+-> JSON final
+```
 
-Con los documentos reales actuales, el sistema esta listo para piloto interno si se usa el flujo completo, no Qwen solo.
+La VPS sin GPU puede correr OCR + parsers + validacion. El fallback con Qwen conviene correrlo en una maquina con GPU o dejarlo desactivado en la VPS liviana.
 
-Para produccion final todavia conviene:
+## 2. Estado actual recomendado
 
-- revisar los casos con baja coincidencia campo por campo;
-- guardar logs de extracciones reales;
-- conectar la web a `POST /extract`;
-- medir tiempos con PDFs reales en el VPS;
-- revisar legal/privacidad antes de guardar documentos de usuarios.
+El proyecto ya esta en condiciones de piloto interno si se usa el flujo `production`.
 
-## Variables de entorno
+Para produccion final todavia falta:
+
+1. Conectar la web real a `POST /extract`.
+2. Activar API key.
+3. Activar logs.
+4. Medir tiempos con PDFs reales.
+5. Revisar politica de privacidad y retencion.
+6. Definir como se revisan errores.
+7. Versionar datasets y modelos.
+
+## 3. Variables de entorno
 
 ```bash
 FACTURA_API_KEY="cambiar-esta-clave"
@@ -32,7 +40,17 @@ OCR_LANG="spa+eng"
 OCR_DPI="220"
 ```
 
-Si `FACTURA_API_KEY` esta definida, `POST /extract` exige:
+Significado:
+
+- `FACTURA_API_KEY`: protege `POST /extract`.
+- `FACTURA_LOG_FILE`: guarda logs JSONL livianos.
+- `FACTURA_MAX_UPLOAD_MB`: limite de subida.
+- `OCR_LANG`: idiomas para Tesseract.
+- `OCR_DPI`: resolucion para renderizar PDFs escaneados.
+
+## 4. Seguridad de API
+
+Si `FACTURA_API_KEY` esta definida, cada request a `/extract` debe enviar:
 
 ```text
 X-API-Key: cambiar-esta-clave
@@ -40,40 +58,7 @@ X-API-Key: cambiar-esta-clave
 
 `GET /health` queda abierto para monitoreo.
 
-## Ejecutar en VPS con Python
-
-```bash
-cd ~/factura-training
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-api.txt
-sudo apt-get update
-sudo apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng poppler-utils
-FACTURA_API_KEY="cambiar-esta-clave" \
-FACTURA_LOG_FILE="$PWD/logs/extractions.jsonl" \
-python api.py --host 0.0.0.0 --port 8000
-```
-
-## Ejecutar con Docker
-
-La imagen Docker incluida es para API liviana: OCR, parsers y validacion. No instala Unsloth ni carga el LoRA.
-
-```bash
-docker build -t factura-training-api .
-docker run --rm -p 8000:8000 \
-  -e FACTURA_API_KEY="cambiar-esta-clave" \
-  -e FACTURA_LOG_FILE="/app/logs/extractions.jsonl" \
-  -v "$PWD/logs:/app/logs" \
-  factura-training-api
-```
-
-Healthcheck:
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-Extraccion:
+Ejemplo:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true" \
@@ -81,83 +66,216 @@ curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true" \
   -F "file=@factura.pdf"
 ```
 
-En una maquina con GPU, para permitir que Qwen mejore respuestas de baja confianza:
+## 5. Ejecutar en VPS con Python
+
+Instalar sistema:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true&use_model=true&model=lora&model_policy=low_confidence&min_confidence=0.82" \
-  -H "X-API-Key: cambiar-esta-clave" \
-  -F "file=@factura.pdf"
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng poppler-utils
 ```
 
-## Respuesta de la API
+Preparar proyecto:
 
-La API devuelve:
+```bash
+cd ~/factura-training
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-api.txt
+```
 
-- `ok`: si el JSON paso validacion.
+Levantar API:
+
+```bash
+FACTURA_API_KEY="cambiar-esta-clave" \
+FACTURA_LOG_FILE="$PWD/logs/extractions.jsonl" \
+python api.py --host 0.0.0.0 --port 8000
+```
+
+Probar:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+## 6. Ejecutar con Docker
+
+La imagen Docker incluida es liviana. Instala OCR, parsers y validacion. No instala Unsloth ni carga el LoRA.
+
+Construir:
+
+```bash
+docker build -t factura-training-api .
+```
+
+Ejecutar:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e FACTURA_API_KEY="cambiar-esta-clave" \
+  -e FACTURA_LOG_FILE="/app/logs/extractions.jsonl" \
+  -e FACTURA_MAX_UPLOAD_MB="25" \
+  -v "$PWD/logs:/app/logs" \
+  factura-training-api
+```
+
+## 7. Ejecutar como servicio systemd
+
+Crear archivo:
+
+```bash
+sudo nano /etc/systemd/system/factura-api.service
+```
+
+Contenido:
+
+```ini
+[Unit]
+Description=Factura Training API
+After=network.target
+
+[Service]
+User=tobias
+WorkingDirectory=/home/tobias/factura-training
+Environment="FACTURA_API_KEY=cambiar-esta-clave"
+Environment="FACTURA_LOG_FILE=/home/tobias/factura-training/logs/extractions.jsonl"
+Environment="FACTURA_MAX_UPLOAD_MB=25"
+ExecStart=/home/tobias/factura-training/.venv/bin/python /home/tobias/factura-training/api.py --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Activar:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable factura-api
+sudo systemctl restart factura-api
+sudo systemctl status factura-api
+```
+
+Ver logs:
+
+```bash
+sudo journalctl -u factura-api -n 100 --no-pager
+```
+
+## 8. Contrato del endpoint
+
+Endpoint:
+
+```text
+POST /extract
+```
+
+Multipart:
+
+```text
+file=@factura.pdf
+```
+
+Query params utiles:
+
+- `force_ocr=true`: fuerza OCR visual.
+- `ocr_lang=spa+eng`: idiomas de OCR.
+- `ocr_dpi=220`: DPI de renderizado.
+- `use_model=true`: permite fallback con Qwen.
+- `model=lora`: usa `factura-qwen-lora`.
+- `model_policy=fallback`: usa Qwen solo si parser falla.
+- `model_policy=low_confidence`: usa Qwen si parser falla o baja confianza.
+- `model_policy=always`: prueba Qwen siempre.
+- `min_confidence=0.82`: umbral para `low_confidence`.
+
+## 9. Respuesta de la API
+
+Campos principales:
+
+- `ok`: si el resultado paso validacion.
 - `source`: `parser`, `model` o `null`.
-- `confidence`: confianza simple para priorizar revision.
+- `model`: modelo usado, si se uso Qwen.
+- `confidence`: confianza estimada.
 - `elapsed_ms`: tiempo de extraccion posterior al OCR/modelo.
 - `errors`: errores de validacion.
 - `data`: JSON normalizado.
-- `input`: archivo, metodo de texto/OCR y largo del OCR.
+- `raw_model_response`: salida cruda del modelo si se uso.
+- `input`: metadata del archivo y OCR.
 - `request_id`: identificador para cruzar logs.
 
-`model_policy` controla cuando se usa Qwen:
+## 10. Logs
 
-- `fallback`: solo si el parser no resuelve.
-- `low_confidence`: si el parser falla o devuelve baja confianza.
-- `always`: prueba Qwen siempre y conserva la respuesta mas confiable.
+Si `FACTURA_LOG_FILE` esta definido, se guarda un JSONL por request.
 
-## Logs
-
-Si `FACTURA_LOG_FILE` esta definido, se guarda un JSONL por request con:
+Incluye:
 
 - `request_id`;
-- estado `ok`;
-- fuente usada;
-- confianza;
+- timestamp;
+- `ok`;
+- `source`;
+- `model`;
+- `confidence`;
+- `elapsed_ms`;
 - errores;
-- tipo de documento;
-- metadata del input.
+- metadata del input;
+- tipo de documento detectado.
 
-No guarda el PDF ni el OCR completo. Si se decide guardar documentos de usuarios para mejorar el sistema, debe hacerse con consentimiento y revision humana.
+No guarda PDF ni OCR completo.
 
-## Analizar evaluaciones
+## 11. Privacidad y aprendizaje con documentos reales
 
-Despues de correr:
+No conviene autoentrenar en caliente con documentos subidos por usuarios.
+
+Flujo correcto:
+
+1. Usuario sube documento.
+2. Sistema extrae JSON.
+3. Se guarda log.
+4. Casos dudosos van a revision.
+5. Solo documentos autorizados y revisados se suman al dataset.
+6. Se reentrena una version nueva.
+
+Antes de guardar PDFs reales, definir consentimiento, retencion y acceso interno.
+
+## 12. Medicion para piloto
+
+Medir:
+
+- tiempo promedio por PDF;
+- porcentaje `ok=true`;
+- cantidad de documentos con baja `confidence`;
+- errores mas frecuentes;
+- proveedores/documentos que mas fallan;
+- casos donde OCR no lee bien.
+
+Comandos:
 
 ```bash
 python scripts/evaluate_real_dataset.py --eval-file data/real_eval.jsonl --mode production --out data/eval_results_production.jsonl
-```
-
-resumir errores con:
-
-```bash
 python scripts/analyze_eval_results.py data/eval_results_production.jsonl
 ```
 
-Para el LoRA:
+## 13. Criterio de piloto
 
-```bash
-python scripts/evaluate_real_dataset.py --eval-file data/real_eval.jsonl --model lora --out data/eval_results_model.jsonl
-python scripts/analyze_eval_results.py data/eval_results_model.jsonl
-```
+El piloto interno se considera listo cuando:
 
-## Criterio de cierre
+- `GET /health` responde.
+- `POST /extract` responde con API key.
+- Tesseract esta disponible.
+- `production` tiene schema OK cercano a 100%.
+- El tiempo promedio real esta por debajo de 10 segundos.
+- Hay logs activos.
+- La web puede subir PDF y recibir JSON.
 
-Para considerar la version lista para un piloto:
+## 14. Criterio de produccion final
 
-- `JSON/schema OK` cercano a 100% en production.
-- tiempos reales por PDF por debajo de 10 segundos en promedio.
-- API key activa.
-- logs activos.
-- web conectada a `/extract`.
-- errores dudosos visibles para revision.
+Produccion final requiere:
 
-Para considerar produccion final:
-
-- lote real amplio validado;
-- politica de privacidad/retencion definida;
-- monitoreo de errores;
-- backups de modelos/datasets;
-- proceso de reentrenamiento versionado.
+- pruebas reales con usuarios;
+- monitoreo;
+- manejo de errores en frontend;
+- politica de privacidad;
+- backups de dataset/modelo;
+- versionado de releases;
+- proceso de reentrenamiento controlado.

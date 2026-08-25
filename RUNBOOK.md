@@ -1,160 +1,100 @@
-# Factura OCR -> JSON fine-tuning
+# Factura Training - Manual operativo
 
-Flujo de prueba:
+## 1. Objetivo del proyecto
 
-1. OCR local produce texto.
-2. Qwen chico fine-tuneado recibe texto OCR.
-3. El modelo devuelve JSON.
-4. Scripts de validación revisan si el JSON es parseable y si tiene las claves esperadas.
+Este proyecto convierte facturas, recibos e invoices en JSON normalizado.
 
-## Entrar al entorno remoto
+El sistema completo no es solamente Qwen. El flujo real es:
 
-Desde tu PC:
+```text
+PDF o imagen
+-> OCR local con Tesseract
+-> parser/reglas para formatos conocidos
+-> normalizacion
+-> validacion
+-> Qwen LoRA como fallback opcional
+-> JSON final para la web/backend
+```
+
+La idea de produccion es usar el pipeline completo, porque es mas rapido, mas barato y mas controlable que depender solamente de un modelo generativo.
+
+## 2. Componentes principales
+
+- `api.py`: endpoint HTTP para subir PDFs/imagenes y recibir JSON.
+- `ocr.py`: OCR local con Tesseract, renderizado de PDF y lectura de imagenes.
+- `infer.py`: parsers, normalizadores, validadores y ejecucion del LoRA.
+- `train.py`: entrenamiento LoRA con Unsloth/Qwen.
+- `scripts/batch_extract_pdfs.py`: procesamiento masivo de carpetas con PDFs/imagenes.
+- `scripts/build_real_dataset.py`: arma `real_train.jsonl` y `real_eval.jsonl`.
+- `scripts/evaluate_real_dataset.py`: evalua el LoRA puro o el flujo production.
+- `scripts/analyze_eval_results.py`: resume errores, campos flojos y casos prioritarios.
+- `docs/production-readiness.md`: checklist de piloto/produccion.
+- `docs/arca-schema.md`: schema ARCA usado por el extractor.
+- `docs/real-invoice-structure-notes.md`: formatos reales analizados.
+
+## 3. Flujo recomendado de trabajo
+
+1. Subir o copiar PDFs a la maquina donde se van a procesar.
+2. Ejecutar batch para extraer OCR y JSON.
+3. Revisar fallidos e incompletos.
+4. Construir dataset real.
+5. Entrenar el LoRA en la PC con GPU.
+6. Evaluar `production` para medir el pipeline completo.
+7. Evaluar `model` para medir Qwen LoRA puro.
+8. Mejorar parsers o dataset segun los errores.
+9. Levantar API.
+10. Conectar la web a `POST /extract`.
+11. Guardar logs y revisar casos dudosos.
+
+## 4. Entrar a la PC con GPU
+
+Desde Windows:
 
 ```bash
 ssh tobias@100.96.9.102
+```
+
+Si al entrar quedas en Windows remoto, abrir WSL:
+
+```bash
 wsl
+```
+
+Entrar al proyecto:
+
+```bash
 cd /mnt/c/Users/tobias/factura-training
+```
+
+Activar entorno:
+
+```bash
 source ~/miniconda3/bin/activate
 conda activate factura-training
 ```
 
-Si vuelve el error `No space left on device` durante instalaciones:
+Traer los ultimos cambios:
 
 ```bash
-mkdir -p ~/tmp
-export TMPDIR=$HOME/tmp
-export TEMP=$HOME/tmp
-export TMP=$HOME/tmp
+git pull
 ```
 
-## Confirmar GPU y dependencias
+## 5. Confirmar GPU y entorno
 
 ```bash
-python -c "import torch; import unsloth; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
-```
-
-## Entrenar
-
-```bash
-python train.py
-```
-
-Por defecto, `train.py` usa:
-
-- `data/train.jsonl`
-- `data/synthetic_invoices/synthetic_train.jsonl`, si existe
-
-Para entrenar solo con un archivo:
-
-```bash
-python train.py --data-files data/train.jsonl --max-steps 80
+python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
 ```
 
 Resultado esperado:
 
-- `outputs/checkpoint-20/`
-- `factura-qwen-lora/`
-
-El entrenamiento actual usa ejemplos ARCA manuales y puede sumar el dataset sintetico generado, con `max_seq_length=2048` y `max_steps=160` por defecto, porque el JSON final es mas largo que la prueba inicial.
-
-## Probar una factura nueva con el LoRA
-
-```bash
-python infer.py --model lora --ocr-file data/test_ocr.txt
+```text
+True
+NVIDIA GeForce RTX 4050 Laptop GPU
 ```
 
-Para probar texto directo:
+Si aparece `python: command not found`, falta activar conda o estas fuera del entorno correcto.
 
-```bash
-python infer.py --model lora --ocr-text "Factura A 0001-00000099 ..."
-```
-
-## Comparar base vs fine-tuneado
-
-```bash
-python compare_base_lora.py --ocr-file data/test_ocr.txt
-```
-
-Este script carga primero el modelo base, libera memoria CUDA y luego carga el LoRA. Es más amable con una RTX 4050 de 6 GB.
-
-Si el modelo genera campos fuera del esquema o JSON roto, no es un problema de CUDA: es senal de que el dataset todavia es demasiado chico. Reentrena con el `train.py` actualizado y agrega mas ejemplos reales anonimizados.
-
-## Evaluar campo por campo
-
-```bash
-python evaluate.py --model both --eval-file data/eval.jsonl
-```
-
-Para evaluar el dataset real contra el flujo completo de produccion:
-
-```bash
-python scripts/evaluate_real_dataset.py --eval-file data/real_eval.jsonl --mode production --out data/eval_results_production.jsonl
-```
-
-Para evaluar el LoRA puro:
-
-```bash
-python scripts/evaluate_real_dataset.py --eval-file data/real_eval.jsonl --model lora --out data/eval_results_model.jsonl
-```
-
-Para resumir errores, campos flojos y casos prioritarios:
-
-```bash
-python scripts/analyze_eval_results.py data/eval_results_production.jsonl
-python scripts/analyze_eval_results.py data/eval_results_model.jsonl
-```
-
-## Levantar endpoint local
-
-El endpoint local permite subir un PDF y devolver el JSON normalizado usando el mismo parser de `infer.py`.
-
-```bash
-python api.py --host 127.0.0.1 --port 8000
-```
-
-Healthcheck:
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-Extraer desde PDF:
-
-```bash
-curl -X POST http://127.0.0.1:8000/extract -F "file=@factura.pdf"
-```
-
-Extraer desde texto OCR:
-
-```bash
-curl -X POST http://127.0.0.1:8000/extract \
-  -H "Content-Type: application/json" \
-  -d "{\"ocr_text\":\"Factura A ...\"}"
-```
-
-Por defecto primero intenta resolver con parsers deterministicos para ARCA, GoDaddy y Teamwork/Wise. Si el documento no se reconoce y se quiere usar Qwen/LoRA como fallback:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/extract?use_model=true&model=lora" -F "file=@factura.pdf"
-```
-
-En una maquina con GPU tambien se puede pedir que Qwen intervenga cuando el parser devuelve una respuesta valida pero con baja confianza:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/extract?use_model=true&model=lora&model_policy=low_confidence&min_confidence=0.82" \
-  -F "file=@factura.pdf"
-```
-
-Politicas disponibles:
-
-- `fallback`: usa Qwen solo si el parser falla.
-- `low_confidence`: usa Qwen si el parser falla o si la confianza queda por debajo del umbral.
-- `always`: prueba Qwen siempre y conserva la salida mas confiable.
-
-### OCR local para PDFs escaneados
-
-El endpoint no usa servicios externos pagos. Primero intenta leer texto embebido del PDF. Si el PDF es escaneado o se fuerza OCR, renderiza las paginas y usa Tesseract local.
+## 6. Instalar OCR local
 
 En Ubuntu/WSL:
 
@@ -163,38 +103,167 @@ sudo apt-get update
 sudo apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng poppler-utils
 ```
 
-En Windows conviene instalar Tesseract y dejar `tesseract.exe` en el `PATH`, o definir:
+Verificar:
+
+```bash
+tesseract --version
+which tesseract
+```
+
+En Windows se puede instalar Tesseract y dejarlo en `PATH`, o definir:
 
 ```powershell
 $env:TESSERACT_CMD="C:\Program Files\Tesseract-OCR\tesseract.exe"
 ```
 
-Forzar OCR aunque el PDF tenga texto embebido:
+## 7. Procesar una carpeta de PDFs
+
+Para procesar PDFs en subcarpetas:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true&ocr_lang=spa+eng&ocr_dpi=220" -F "file=@factura-escaneada.pdf"
+python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/pdf2_facturas \
+  --pattern "**/*.pdf" \
+  --output-dir data/real_invoices_analysis_pdf2_pdf \
+  --write-ocr \
+  --write-json
 ```
 
-Tambien acepta imagenes:
+Para procesar imagenes:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/extract?ocr_lang=spa+eng" -F "file=@factura.jpg"
+python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/pdf2_facturas \
+  --pattern "**/*.jpg" \
+  --output-dir data/real_invoices_analysis_pdf2_jpg \
+  --write-ocr \
+  --write-json
 ```
 
-El `GET /health` informa si Tesseract esta disponible y que comando detecto.
+Cambiar `jpg` por `jpeg` o `png` si hace falta.
 
-### API key para `/extract`
-
-Si se define la variable `FACTURA_API_KEY`, el endpoint `POST /extract` exige el
-header `X-API-Key`. El endpoint `GET /health` queda libre para monitoreo.
-
-Ejemplo local:
+Para reintentar solo los fallidos:
 
 ```bash
-FACTURA_API_KEY="cambiar-esta-clave" python api.py --host 127.0.0.1 --port 8000
+python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/pdf2_facturas \
+  --pattern "**/*.pdf" \
+  --output-dir data/real_invoices_analysis_pdf2_pdf \
+  --failed-from data/real_invoices_analysis_pdf2_pdf/batch_summary.jsonl \
+  --write-ocr \
+  --write-json
 ```
 
-Request autorizada:
+## 8. Construir dataset real
+
+Cuando el batch ya genero `.txt` y `.json`, crear train/eval:
+
+```bash
+python scripts/build_real_dataset.py --input-dir data/real_invoices_analysis_pdf2_pdf
+```
+
+Salida esperada:
+
+```text
+data/real_train.jsonl
+data/real_eval.jsonl
+```
+
+El split separa ejemplos de entrenamiento y evaluacion para medir con casos no vistos.
+
+## 9. Entrenar el LoRA
+
+Entrenamiento normal:
+
+```bash
+python train.py --max-steps 600
+```
+
+Entrenamiento reforzando externos:
+
+```bash
+python train.py \
+  --data-files data/real_train.jsonl data/real_train_external.jsonl data/real_train_external.jsonl data/real_train_external.jsonl \
+  --max-steps 800
+```
+
+El modelo queda guardado en:
+
+```text
+factura-qwen-lora/
+```
+
+Conviene guardar versiones buenas:
+
+```bash
+cp -r factura-qwen-lora factura-qwen-lora-external-weighted-800
+```
+
+## 10. Evaluar resultados
+
+Evaluar el pipeline completo:
+
+```bash
+python scripts/evaluate_real_dataset.py \
+  --eval-file data/real_eval.jsonl \
+  --mode production \
+  --out data/eval_results_production.jsonl
+```
+
+Evaluar Qwen LoRA puro:
+
+```bash
+python scripts/evaluate_real_dataset.py \
+  --eval-file data/real_eval.jsonl \
+  --model lora \
+  --out data/eval_results_model.jsonl
+```
+
+Analizar errores:
+
+```bash
+python scripts/analyze_eval_results.py data/eval_results_production.jsonl
+python scripts/analyze_eval_results.py data/eval_results_model.jsonl
+```
+
+Interpretacion:
+
+- `JSON/schema OK`: salida valida y con estructura correcta.
+- `Exactos`: todos los campos coinciden con el esperado.
+- `Campos OK`: porcentaje campo por campo.
+- `ARCA schema OK`: validez en facturas/notas ARCA.
+- `Externos schema OK`: validez en recibos/invoices externos.
+
+## 11. Probar una factura individual
+
+Con OCR ya guardado:
+
+```bash
+python infer.py --model lora --ocr-file "data/real_invoices_analysis_pdf2_pdf/05 Mayo - Catalonia.txt"
+```
+
+Si la ruta tiene espacios, siempre va entre comillas.
+
+## 12. Levantar API local
+
+Sin API key:
+
+```bash
+python api.py --host 127.0.0.1 --port 8000
+```
+
+Con API key y logs:
+
+```bash
+FACTURA_API_KEY="cambiar-esta-clave" \
+FACTURA_LOG_FILE="$PWD/logs/extractions.jsonl" \
+python api.py --host 0.0.0.0 --port 8000
+```
+
+Healthcheck:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Extraer PDF:
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true" \
@@ -202,123 +271,181 @@ curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true" \
   -F "file=@factura.pdf"
 ```
 
-En `systemd`, agregar la variable dentro del bloque `[Service]`:
+## 13. Usar Qwen como fallback desde la API
 
-```ini
-Environment="FACTURA_API_KEY=cambiar-esta-clave"
-Environment="FACTURA_LOG_FILE=/var/log/factura-training/extractions.jsonl"
+En una PC con GPU:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true&use_model=true&model=lora&model_policy=low_confidence&min_confidence=0.82" \
+  -H "X-API-Key: cambiar-esta-clave" \
+  -F "file=@factura.pdf"
 ```
 
-`FACTURA_LOG_FILE` guarda un JSONL liviano por request con `request_id`, estado,
-fuente usada, confianza, errores y metadata del input. No guarda PDFs ni OCR
-completo.
+Politicas:
 
-Para despliegue con Docker o checklist de piloto/produccion, ver:
+- `fallback`: usa Qwen solo si el parser no resuelve.
+- `low_confidence`: usa Qwen si el parser falla o devuelve baja confianza.
+- `always`: prueba Qwen siempre y conserva la salida mas confiable.
+
+## 14. Usar la API desde Windows
+
+En `cmd.exe`:
+
+```cmd
+curl.exe -X POST "http://127.0.0.1:8000/extract?force_ocr=true" -F "file=@C:\Users\Tobias\Desktop\factura.pdf"
+```
+
+Con API key:
+
+```cmd
+curl.exe -X POST "http://127.0.0.1:8000/extract?force_ocr=true" -H "X-API-Key: cambiar-esta-clave" -F "file=@C:\Users\Tobias\Desktop\factura.pdf"
+```
+
+Si el path tiene espacios, igual se deja todo el argumento `file=@...` entre comillas.
+
+## 15. Desplegar en VPS
+
+La VPS sin GPU puede correr OCR + parsers + validacion. Qwen LoRA conviene dejarlo en GPU o como servicio separado.
+
+Instalacion minima:
+
+```bash
+git clone https://github.com/TobiasYCR/factura-training.git
+cd factura-training
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-api.txt
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng poppler-utils
+```
+
+Ejecutar:
+
+```bash
+FACTURA_API_KEY="cambiar-esta-clave" \
+FACTURA_LOG_FILE="$PWD/logs/extractions.jsonl" \
+python api.py --host 0.0.0.0 --port 8000
+```
+
+Guia completa:
 
 ```text
 docs/production-readiness.md
 ```
 
-## Procesar una carpeta completa
+## 16. Desplegar con Docker
 
-Para probar muchos PDFs juntos:
+Construir:
 
 ```bash
-python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF
+docker build -t factura-training-api .
 ```
 
-El resumen queda en:
+Ejecutar:
+
+```bash
+docker run --rm -p 8000:8000 \
+  -e FACTURA_API_KEY="cambiar-esta-clave" \
+  -e FACTURA_LOG_FILE="/app/logs/extractions.jsonl" \
+  -v "$PWD/logs:/app/logs" \
+  factura-training-api
+```
+
+## 17. Guardar documentos de usuarios
+
+No se debe autoentrenar en caliente.
+
+Flujo correcto:
+
+1. Usuario sube PDF.
+2. Sistema extrae OCR y JSON.
+3. Se guarda resultado, errores y confianza.
+4. Casos dudosos van a revision.
+5. Solo documentos autorizados y revisados entran al dataset.
+6. Se reentrena una version nueva.
+
+Esto evita aprender errores propios o guardar datos sensibles sin control.
+
+## 18. Cuando considerar listo el sistema
+
+Para piloto interno:
+
+- API funcionando.
+- OCR local funcionando.
+- `production` con schema OK cercano a 100%.
+- Tiempo promedio menor a 10 segundos por PDF.
+- Logs activos.
+- API key activa.
+- Web conectada a `/extract`.
+
+Para produccion final:
+
+- Politica de privacidad y retencion definida.
+- Monitoreo de errores.
+- Dataset/versiones respaldadas.
+- Proceso de mejora con revision humana.
+- Pruebas con documentos reales de usuarios.
+
+## 19. Problemas comunes
+
+### 19.1 `python: command not found`
+
+Activar conda:
+
+```bash
+source ~/miniconda3/bin/activate
+conda activate factura-training
+```
+
+### 19.2 No encuentra PDFs
+
+Usar pattern recursivo:
+
+```bash
+--pattern "**/*.pdf"
+```
+
+### 19.3 Rutas con espacios
+
+Siempre usar comillas:
+
+```bash
+python infer.py --ocr-file "data/real_invoices_analysis_pdf2_pdf/05 Mayo - Catalonia.txt"
+```
+
+### 19.4 Tesseract no disponible
+
+Instalar:
+
+```bash
+sudo apt-get install -y tesseract-ocr tesseract-ocr-spa tesseract-ocr-eng poppler-utils
+```
+
+### 19.5 API da 401
+
+Falta header:
 
 ```text
-data/real_invoices_analysis/batch_summary.jsonl
+X-API-Key: cambiar-esta-clave
 ```
 
-Ese directorio esta ignorado por Git porque puede contener datos reales. Si queres guardar el JSON de cada PDF:
+### 19.6 VPS no responde desde afuera
+
+Revisar si el proceso esta escuchando en `0.0.0.0`, firewall, puerto abierto o usar tunel SSH.
+
+## 20. Flujo Git recomendado
+
+En local/Codex:
 
 ```bash
-python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF --write-json
+git add .
+git commit -m "English commit message"
+git push
 ```
 
-En la PC con Tesseract instalado tambien se puede forzar OCR visual:
+En GPU/VPS:
 
 ```bash
-python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF --force-ocr
-```
-
-Para guardar el texto OCR y revisar fallos:
-
-```bash
-python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF --write-ocr --write-json
-```
-
-Para reintentar solamente los fallidos de una corrida anterior:
-
-```bash
-python scripts/batch_extract_pdfs.py /mnt/c/Users/tobias/Desktop/PDF \
-  --failed-from data/real_invoices_analysis/batch_summary.jsonl \
-  --write-ocr --write-json
-```
-
-## Generar facturas sinteticas
-
-```bash
-python scripts/generate_synthetic_invoices.py --count 100 --seed 42
-```
-
-Salida:
-
-- `data/synthetic_invoices/synthetic_train.jsonl`: dataset para entrenamiento.
-- `data/synthetic_invoices/manifest.jsonl`: indice de ejemplos generados.
-- `data/synthetic_invoices/pdfs/`: PDFs regenerables, ignorados por Git.
-- `data/synthetic_invoices/ocr/`: textos OCR regenerables, ignorados por Git.
-
-El archivo `data/eval.jsonl` debe contener ejemplos no usados en entrenamiento, con este formato:
-
-```json
-{"input":"texto OCR","output":"{\"tipo_comprobante\":\"Factura A\", ...}"}
-```
-
-Para que la medición tenga sentido, conviene separar:
-
-- `data/train.jsonl`: ejemplos de entrenamiento.
-- `data/eval.jsonl`: ejemplos nunca vistos, usados solo para medir.
-
-## Próximo paso recomendado
-
-El dataset ya fue adaptado a `docs/arca-schema.md` y `schemas/arca_invoice_schema.json`. El proximo salto es agregar 30-100 facturas reales anonimizadas de ARCA/OCR, manteniendo ese mismo esquema. Con pocos ejemplos el LoRA puede memorizar formato, pero todavia no demuestra generalizacion.
-
-## Dataset real desde PDFs procesados
-
-Cuando el batch termina OK y quedan generados los `.txt` y `.json` en
-`data/real_invoices_analysis`, se puede construir un dataset real para fine-tuning:
-
-```bash
-python scripts/build_real_dataset.py
-```
-
-Salida:
-
-- `data/real_train.jsonl`: ejemplos reales para entrenamiento.
-- `data/real_eval.jsonl`: ejemplos reales reservados para evaluacion.
-
-El script mezcla facturas ARCA y comprobantes externos usando una instruccion por ejemplo,
-asi el modelo no recibe una consigna ARCA cuando el output esperado es GoDaddy,
-Teamwork/Wise u otro documento externo.
-
-`train.py` usa automaticamente estos archivos si existen:
-
-- `data/train.jsonl`
-- `data/real_train.jsonl`
-- `data/synthetic_invoices/synthetic_train.jsonl`
-
-Para entrenar despues de construir el dataset real:
-
-```bash
-python train.py
-```
-
-Para una prueba corta:
-
-```bash
-python train.py --max-steps 40
+cd /mnt/c/Users/tobias/factura-training
+git pull
 ```

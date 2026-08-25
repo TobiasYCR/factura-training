@@ -1,104 +1,238 @@
-# ARCA invoice extraction schema
+# Schema ARCA normalizado
 
-Fuente revisada: `manual-desarrollador-ARCA-COMPG.pdf`, especialmente las secciones de `FECAESolicitar`, `FECompConsultar`, tipos de comprobante, tipos de documento, monedas, cotizacion, IVA y tributos.
+## 1. Objetivo
 
-## Decision
+Este documento define el JSON que devuelve el sistema cuando detecta una factura, nota de credito o nota de debito tipo ARCA/ex AFIP.
 
-El modelo no debe intentar devolver el XML/SOAP de ARCA. Para nuestra app conviene devolver un JSON normalizado, estable y facil de validar. Los nombres internos quedan en `snake_case`, y cada campo mantiene una correspondencia clara con los conceptos de ARCA.
+No se intenta devolver XML/SOAP de ARCA. La salida es un JSON interno, estable y facil de validar.
 
-El pipeline queda:
+## 2. Fuente conceptual
+
+El schema se basa en conceptos de comprobantes electronicos ARCA:
+
+- tipo de comprobante;
+- punto de venta;
+- numero de comprobante;
+- fecha;
+- emisor;
+- receptor;
+- moneda;
+- importes;
+- IVA;
+- tributos;
+- CAE.
+
+La documentacion revisada fue el manual de desarrollador ARCA/COMPG.
+
+## 3. Flujo donde se usa
 
 ```text
-PDF factura ARCA
+PDF ARCA
 -> OCR
--> texto OCR
--> Qwen LoRA
--> JSON normalizado
--> validaciones por codigo
--> backend / base de datos
+-> parser o Qwen
+-> normalizacion al schema
+-> validacion
+-> JSON final
 ```
 
-## Core fields
+## 4. Campos raiz
 
-Campos minimos para facturas A, B y C:
+| Campo | Tipo | Descripcion |
+| --- | --- | --- |
+| `tipo_comprobante` | string/null | Ej: `Factura A`, `Factura B`, `Factura C`, `Nota de credito A`. |
+| `codigo_comprobante` | integer/null | Codigo ARCA si se puede inferir. Ej: `1` para Factura A, `6` para Factura B, `11` para Factura C. |
+| `punto_venta` | string/null | Punto de venta normalizado a 5 digitos. |
+| `numero_comprobante` | string/null | Numero normalizado a 8 digitos. |
+| `numero_factura` | string/null | Formato `00000-00000000`. |
+| `fecha_emision` | string/null | Fecha ISO `YYYY-MM-DD`. |
+| `emisor` | object | Datos del emisor. |
+| `receptor` | object | Datos del receptor. |
+| `moneda` | string/null | `PES`, `DOL` u otra moneda ARCA si aparece. |
+| `tipo_cambio` | number/null | Para pesos normalmente `1`. |
+| `subtotal` | number/null | Neto gravado o subtotal principal. |
+| `importe_no_gravado` | number/null | Importe no gravado. |
+| `importe_exento` | number/null | Importe exento. |
+| `iva_total` | number/null | Total IVA. |
+| `tributos_total` | number/null | Total tributos/percepciones. |
+| `impuestos` | number/null | Suma general de impuestos cuando aplica. |
+| `total` | number/null | Importe total final. |
+| `cae` | string/null | Codigo de autorizacion electronico. |
+| `fecha_vencimiento_cae` | string/null | Fecha ISO `YYYY-MM-DD`. |
+| `iva` | array | Detalle de IVA. |
+| `tributos` | array | Detalle de tributos/percepciones. |
+| `items` | array | Detalle de items si el OCR permite extraerlos. |
 
-| Campo JSON | Equivalente ARCA | Tipo | Reglas |
-| --- | --- | --- | --- |
-| `tipo_comprobante` | `CbteTipo` descripcion | string | Ej: `Factura A`, `Factura B`, `Factura C`. |
-| `codigo_comprobante` | `CbteTipo` | integer/null | Ej: A suele mapear a `1`, B a `6`, C a `11` cuando se conozca. |
-| `punto_venta` | `PtoVta` | string/null | Siempre normalizado a 5 digitos cuando aparezca. |
-| `numero_comprobante` | `CbteDesde` / `CbteHasta` | string/null | Siempre normalizado a 8 digitos cuando aparezca. |
-| `numero_factura` | `PtoVta-CbteDesde` | string/null | Formato `00000-00000000` para ARCA moderno. Aceptar `0000-00000000` en facturas viejas o muestras. |
-| `fecha_emision` | `CbteFch` | string/null | Formato ISO `YYYY-MM-DD`. |
-| `emisor.nombre` | texto factura | string/null | Razon social del emisor. |
-| `emisor.cuit` | `Auth/Cuit` o emisor impreso | string/null | Formato `00-00000000-0`. |
-| `receptor.nombre` | texto factura | string/null | Nombre o razon social del receptor. |
-| `receptor.doc_tipo` | `DocTipo` | integer/null | Ej: `80` para CUIT si se puede inferir. |
-| `receptor.doc_nro` | `DocNro` | string/null | Normalizado sin guiones para codigos ARCA; puede conservar CUIT con guiones en campo adicional si hace falta. |
-| `moneda` | `MonId` | string | `PES`, `DOL`, etc. Usar `PES` para pesos ARCA, no `ARS`, si apuntamos a compatibilidad ARCA. |
-| `tipo_cambio` | `MonCotiz` | number/null | Para `PES`, normalmente `1`. |
-| `subtotal` | `ImpNeto` | number/null | Neto gravado. |
-| `importe_no_gravado` | `ImpTotConc` | number/null | Neto no gravado. |
-| `importe_exento` | `ImpOpEx` | number/null | Importe exento. |
-| `impuestos` | `ImpIVA + ImpTrib` | number/null | Total de impuestos si solo queremos un resumen. |
-| `iva_total` | `ImpIVA` | number/null | Suma del array IVA. |
-| `tributos_total` | `ImpTrib` | number/null | Suma del array Tributos. |
-| `total` | `ImpTotal` | number/null | Total final. |
-| `cae` | `CAE` / `CodAutorizacion` | string/null | Codigo de autorizacion electronico. |
-| `fecha_vencimiento_cae` | `CAEFchVto` / `FchVto` | string/null | Formato ISO `YYYY-MM-DD`. |
+## 5. Persona: emisor y receptor
 
-## Nested arrays
+`emisor` y `receptor` tienen siempre estas claves:
 
-Cuando el OCR lo permita, extraer:
+| Campo | Tipo | Regla |
+| --- | --- | --- |
+| `nombre` | string/null | Razon social o nombre limpio, sin etiquetas como `Cliente:`. |
+| `doc_tipo` | integer/null | `80` para CUIT cuando se puede inferir. |
+| `doc_nro` | string/null | Documento sin guiones. |
+| `cuit` | string/null | CUIT con formato `00-00000000-0`. |
+| `condicion_iva` | string/null | Condicion frente al IVA si aparece. |
+
+## 6. IVA
+
+Cada item de `iva`:
 
 ```json
 {
-  "iva": [
-    {
-      "codigo": 5,
-      "descripcion": "21%",
-      "base_imponible": 100.0,
-      "importe": 21.0
-    }
-  ],
-  "tributos": [
-    {
-      "codigo": 99,
-      "descripcion": "Impuesto Municipal",
-      "base_imponible": 150.0,
-      "alicuota": 5.2,
-      "importe": 7.8
-    }
-  ],
-  "items": [
-    {
-      "descripcion": "Servicio mensual",
-      "cantidad": 1,
-      "precio_unitario": 100.0,
-      "importe": 100.0
-    }
-  ]
+  "codigo": 5,
+  "descripcion": "21%",
+  "base_imponible": 100.0,
+  "importe": 21.0
 }
 ```
 
-## Validation rules
+Codigos usados:
 
-Validaciones que deben vivir en codigo, no en el modelo:
+- `4`: IVA 10.5%.
+- `5`: IVA 21%.
+- `6`: IVA 27%.
 
-- `total` debe aproximar `subtotal + importe_no_gravado + importe_exento + iva_total + tributos_total`.
-- Para comprobantes C, `iva_total` y array `iva` deberian ser `0` o vacios.
-- `moneda = "PES"` implica `tipo_cambio = 1` salvo que la factura indique otra cosa rara.
-- `fecha_emision` y `fecha_vencimiento_cae` deben ser fechas validas.
-- `numero_factura` debe poder separarse en `punto_venta` y `numero_comprobante`.
-- Si aparece CAE, debe ser numerico y usualmente de 14 digitos.
+Si el comprobante no discrimina IVA, usar `iva: []` y `iva_total: 0` o `null` segun corresponda.
 
-## Training guidance
+## 7. Tributos
 
-Para fine-tuning, cada ejemplo debe enseñar valores limpios:
+Cada item de `tributos`:
 
-- Usar `numero_factura: "00008-00009123"`, no `"Comp. Nro: 0008-00009123"`.
-- Usar `emisor.cuit: "30-87654321-0"`, no `"CUIT: 30-87654321-0"`.
-- Usar `receptor.nombre: "Transporte Norte SA"`, no `"Cliente: Transporte Norte SA"`.
-- Usar `moneda: "PES"` para pesos y `moneda: "DOL"` para dolares si queremos compatibilidad con ARCA.
+```json
+{
+  "codigo": 99,
+  "descripcion": "Percepcion IIBB",
+  "base_imponible": 100.0,
+  "alicuota": 3.0,
+  "importe": 3.0
+}
+```
 
-El OCR puede traer etiquetas, saltos raros y ruido. Qwen debe normalizar; el validador debe detectar inconsistencias.
+Si el OCR no informa codigo especifico, usar `99`.
+
+## 8. Items
+
+Cada item de `items`:
+
+```json
+{
+  "descripcion": "Servicio mensual",
+  "cantidad": 1,
+  "precio_unitario": 100.0,
+  "importe": 100.0
+}
+```
+
+Reglas:
+
+- Extraer items solo cuando aparezcan lineas claras de productos/servicios.
+- No inventar items.
+- Si no se puede extraer con seguridad, usar `items: []`.
+- En PDFs con ORIGINAL/DUPLICADO/TRIPLICADO, deduplicar items repetidos.
+
+## 9. Moneda
+
+Usar codigos compatibles con ARCA:
+
+- `PES`: pesos argentinos.
+- `DOL`: dolares.
+
+No usar `ARS` para facturas ARCA si se apunta a compatibilidad con ARCA.
+
+## 10. Fechas
+
+Todas las fechas deben salir en formato ISO:
+
+```text
+YYYY-MM-DD
+```
+
+Ejemplos:
+
+- `02/01/2023` -> `2023-01-02`.
+- `31/12/2022` -> `2022-12-31`.
+
+## 11. Numeracion
+
+Reglas:
+
+- `punto_venta`: 5 digitos.
+- `numero_comprobante`: 8 digitos.
+- `numero_factura`: `punto_venta-numero_comprobante`.
+
+Ejemplo:
+
+```json
+{
+  "punto_venta": "00002",
+  "numero_comprobante": "00000045",
+  "numero_factura": "00002-00000045"
+}
+```
+
+## 12. Validaciones
+
+Validaciones que deben vivir en codigo:
+
+- El JSON debe contener todas las claves del schema.
+- Fechas deben tener formato ISO valido.
+- CUIT debe tener formato `00-00000000-0`.
+- CAE, si aparece, debe ser numerico y normalmente de 14 digitos.
+- `numero_factura` debe respetar `00000-00000000`.
+- Importes deben ser numeros o `null`.
+- Arrays deben existir aunque esten vacios.
+
+## 13. Ejemplo completo
+
+```json
+{
+  "tipo_comprobante": "Factura A",
+  "codigo_comprobante": 1,
+  "punto_venta": "00002",
+  "numero_comprobante": "00000045",
+  "numero_factura": "00002-00000045",
+  "fecha_emision": "2019-01-02",
+  "emisor": {
+    "nombre": "MARRANO RICARDO ANDRES",
+    "doc_tipo": 80,
+    "doc_nro": "20234388518",
+    "cuit": "20-23438851-8",
+    "condicion_iva": "IVA Responsable Inscripto"
+  },
+  "receptor": {
+    "nombre": "CS TECH CONSULTING S.A.",
+    "doc_tipo": 80,
+    "doc_nro": "30715444530",
+    "cuit": "30-71544453-0",
+    "condicion_iva": "Responsable Inscripto"
+  },
+  "moneda": "PES",
+  "tipo_cambio": 1,
+  "subtotal": 8880.0,
+  "importe_no_gravado": 0.0,
+  "importe_exento": 0.0,
+  "iva_total": 0.0,
+  "tributos_total": 0.0,
+  "impuestos": 0.0,
+  "total": 8880.0,
+  "cae": "02690182985567",
+  "fecha_vencimiento_cae": "2019-01-12",
+  "iva": [],
+  "tributos": [],
+  "items": []
+}
+```
+
+## 14. Guia para entrenamiento
+
+Cada ejemplo de entrenamiento debe enseñar valores limpios:
+
+- Bien: `"numero_factura": "00008-00009123"`.
+- Mal: `"numero_factura": "Comp. Nro: 0008-00009123"`.
+- Bien: `"cuit": "30-87654321-0"`.
+- Mal: `"cuit": "CUIT: 30-87654321-0"`.
+- Bien: `"moneda": "PES"`.
+- Mal: `"moneda": "ARS"` para ARCA.
+
+El modelo puede recibir OCR con ruido, pero la salida esperada siempre debe estar normalizada.
