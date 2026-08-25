@@ -1291,6 +1291,89 @@ def parse_catalonia_invoice_ocr(ocr_text):
     )
 
 
+def parse_norwegian_travel_receipt_ocr(ocr_text):
+    text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
+    upper_text = text.upper()
+    if "RECIBO DE VIAJE" not in upper_text or "NORWEGIAN" not in upper_text:
+        return None
+
+    reservation = first_match(r"Referencia de reserva:\s*([A-Z0-9-]+)", text, re.IGNORECASE)
+    issue_date = (
+        first_match(r"\b(\d{1,2}\s+[a-záéíóúñ]{3,9}\.?\s+\d{4})", text, re.IGNORECASE)
+        or first_match(r"\b(\d{1,2}/\d{1,2}/\d{4})\b", text)
+    )
+    total = parse_money(first_match(r"Precio total\s+[\d.,]+\s+([\d.,]+)", text, re.IGNORECASE))
+    taxes = parse_money(first_match(r"Total IVA\s+10[,.]50%.*?([\d.,]+)", text, re.IGNORECASE))
+    tax_id = first_match(r"Argentina\s+AR\s+(\d{2}-\d{8}-\d)", text, re.IGNORECASE)
+    card_last4 = first_match(r"VISA\s+\*+(\d{4})", text, re.IGNORECASE)
+    if not (reservation and total is not None):
+        return None
+
+    items = []
+    for line in text.splitlines():
+        item = re.match(r"(?P<description>.+?)\s+\(\d+\)\s+(?P<tax>[\d.,]+)\s+\(.*?\)\s+(?P<amount>[\d.,]+)$", line.strip())
+        if not item:
+            continue
+        amount = parse_money(item.group("amount"))
+        items.append(
+            {
+                "description": clean_external_line(item.group("description")),
+                "quantity": 1,
+                "unit_price": amount,
+                "amount": amount,
+                "term": None,
+                "reference": None,
+            }
+        )
+
+    return normalize_external_document(
+        {
+            "document_type": "external_provider_receipt",
+            "provider": {
+                "name": "Norwegian Air Shuttle",
+                "business_name": "Norwegian Air Shuttle",
+                "tax_id": digits(tax_id) if tax_id else None,
+                "vat_number": None,
+                "address": "PB 115, N-1366 Lysaker, Noruega",
+                "country": "Norway",
+                "phone": "+47 2149 0015" if "+47 2149 0015" in text else None,
+            },
+            "buyer": {
+                "name": first_match(r"\n([A-ZÁÉÍÓÚÑ/ ]+)\s+\(\d{3}-\d+\)", text),
+                "business_name": None,
+                "tax_id": None,
+                "vat_number": None,
+                "address": None,
+                "country": None,
+                "phone": None,
+            },
+            "document": {
+                "title": "Recibo de viaje",
+                "number": reservation,
+                "date": parse_document_date(issue_date),
+                "account_number": None,
+                "customer_number": None,
+                "status": "paid" if card_last4 else None,
+            },
+            "currency": "ARS",
+            "subtotal": round_money(total - taxes) if taxes is not None else None,
+            "taxes": taxes,
+            "fees": 0.0,
+            "total": total,
+            "paid": total if card_last4 else None,
+            "balance_due": 0.0 if card_last4 else None,
+            "payment": {
+                "method": "card" if card_last4 else None,
+                "card_brand": "VISA" if card_last4 else None,
+                "card_last4": card_last4,
+                "amount": total if card_last4 else None,
+            },
+            "items": items,
+            "notes": "Norwegian travel receipt. Not an ARCA invoice.",
+        }
+    )
+
+
 def parse_generic_external_invoice_ocr(ocr_text):
     text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
     upper_text = text.upper()
@@ -2635,6 +2718,7 @@ def parse_supported_document_ocr(ocr_text):
         or parse_ifastnet_invoice_ocr(ocr_text)
         or parse_aerolineas_credit_fiscal_ocr(ocr_text)
         or parse_catalonia_invoice_ocr(ocr_text)
+        or parse_norwegian_travel_receipt_ocr(ocr_text)
         or parse_generic_external_invoice_ocr(ocr_text)
     )
 
