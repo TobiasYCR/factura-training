@@ -103,6 +103,13 @@ def compare_fields(predicted, expected):
     return ok, len(all_keys), mismatches
 
 
+def filename_from_input(text):
+    first_line = str(text).splitlines()[0].strip() if str(text).splitlines() else ""
+    if first_line.lower().startswith("archivo:"):
+        return first_line.split(":", 1)[1].strip()
+    return None
+
+
 def evaluate_row_model(row, model, tokenizer, args):
     raw = generate(
         model,
@@ -193,6 +200,7 @@ def main():
 
             item = {
                 "line": row["_line"],
+                "filename": filename_from_input(row["input"]),
                 "ok_schema": is_valid,
                 "exact": is_exact,
                 "type": "external" if is_external else "arca",

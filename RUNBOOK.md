@@ -86,6 +86,25 @@ Si el modelo genera campos fuera del esquema o JSON roto, no es un problema de C
 python evaluate.py --model both --eval-file data/eval.jsonl
 ```
 
+Para evaluar el dataset real contra el flujo completo de produccion:
+
+```bash
+python scripts/evaluate_real_dataset.py --eval-file data/real_eval.jsonl --mode production --out data/eval_results_production.jsonl
+```
+
+Para evaluar el LoRA puro:
+
+```bash
+python scripts/evaluate_real_dataset.py --eval-file data/real_eval.jsonl --model lora --out data/eval_results_model.jsonl
+```
+
+Para resumir errores, campos flojos y casos prioritarios:
+
+```bash
+python scripts/analyze_eval_results.py data/eval_results_production.jsonl
+python scripts/analyze_eval_results.py data/eval_results_model.jsonl
+```
+
 ## Levantar endpoint local
 
 El endpoint local permite subir un PDF y devolver el JSON normalizado usando el mismo parser de `infer.py`.
@@ -119,6 +138,19 @@ Por defecto primero intenta resolver con parsers deterministicos para ARCA, GoDa
 ```bash
 curl -X POST "http://127.0.0.1:8000/extract?use_model=true&model=lora" -F "file=@factura.pdf"
 ```
+
+En una maquina con GPU tambien se puede pedir que Qwen intervenga cuando el parser devuelve una respuesta valida pero con baja confianza:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/extract?use_model=true&model=lora&model_policy=low_confidence&min_confidence=0.82" \
+  -F "file=@factura.pdf"
+```
+
+Politicas disponibles:
+
+- `fallback`: usa Qwen solo si el parser falla.
+- `low_confidence`: usa Qwen si el parser falla o si la confianza queda por debajo del umbral.
+- `always`: prueba Qwen siempre y conserva la salida mas confiable.
 
 ### OCR local para PDFs escaneados
 
@@ -174,6 +206,17 @@ En `systemd`, agregar la variable dentro del bloque `[Service]`:
 
 ```ini
 Environment="FACTURA_API_KEY=cambiar-esta-clave"
+Environment="FACTURA_LOG_FILE=/var/log/factura-training/extractions.jsonl"
+```
+
+`FACTURA_LOG_FILE` guarda un JSONL liviano por request con `request_id`, estado,
+fuente usada, confianza, errores y metadata del input. No guarda PDFs ni OCR
+completo.
+
+Para despliegue con Docker o checklist de piloto/produccion, ver:
+
+```text
+docs/production-readiness.md
 ```
 
 ## Procesar una carpeta completa

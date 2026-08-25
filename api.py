@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,10 +22,11 @@ from infer import (
 )
 from ocr import DEFAULT_OCR_DPI, DEFAULT_OCR_LANG, OcrUnavailableError, get_ocr_status, ocr_image_bytes, ocr_pdf_bytes
 
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+MAX_UPLOAD_BYTES = int(os.environ.get("FACTURA_MAX_UPLOAD_MB", "25")) * 1024 * 1024
 MODEL_CACHE = {}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 API_KEY = os.environ.get("FACTURA_API_KEY")
+LOG_FILE = os.environ.get("FACTURA_LOG_FILE")
 
 
 def looks_like_broken_embedded_text(text):
@@ -50,6 +52,67 @@ def json_response(handler, status, payload):
     handler.send_header("Content-Length", str(len(data)))
     handler.end_headers()
     handler.wfile.write(data)
+
+
+def is_missing_value(value):
+    if value is None:
+        return True
+    if value == "":
+        return True
+    if isinstance(value, list) and not value:
+        return True
+    return False
+
+
+def document_completeness(data):
+    if not isinstance(data, dict):
+        return 0.0
+
+    scalar_total = 0
+    scalar_present = 0
+
+    def visit(value):
+        nonlocal scalar_total, scalar_present
+        if isinstance(value, dict):
+            for child in value.values():
+                visit(child)
+            return
+        if isinstance(value, list):
+            if not value:
+                scalar_total += 1
+                return
+            for item in value:
+                visit(item)
+            return
+        scalar_total += 1
+        scalar_present += int(not is_missing_value(value))
+
+    visit(data)
+    if scalar_total == 0:
+        return 0.0
+    return scalar_present / scalar_total
+
+
+def calculate_confidence(parsed, errors, source, used_model):
+    if errors:
+        return 0.0
+    if not isinstance(parsed, dict):
+        return 0.0
+    completeness = document_completeness(parsed)
+    if source == "parser":
+        return round(0.55 + (0.43 * completeness), 4)
+    if used_model:
+        return round(0.50 + (0.32 * completeness), 4)
+    return round(0.35 + (0.25 * completeness), 4)
+
+
+def append_log(event):
+    if not LOG_FILE:
+        return
+    path = Path(LOG_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as file:
+        file.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def parse_bool(value, default=False):
@@ -161,28 +224,61 @@ def get_model(model_choice):
     return model_name, MODEL_CACHE[model_name]
 
 
-def extract_document(ocr_text, use_model=False, model_choice="lora", max_new_tokens=900):
+def should_run_model(parsed, errors, use_model, model_policy, confidence, min_confidence):
+    if not use_model:
+        return False
+    if model_policy == "always":
+        return True
+    if parsed is None or errors:
+        return True
+    if model_policy == "low_confidence" and confidence < min_confidence:
+        return True
+    return False
+
+
+def extract_document(
+    ocr_text,
+    use_model=False,
+    model_choice="lora",
+    max_new_tokens=900,
+    model_policy="fallback",
+    min_confidence=0.82,
+):
     started = time.perf_counter()
     raw_model_response = None
     parsed = parse_supported_document_ocr(ocr_text)
     extraction_source = "parser" if parsed is not None else None
     model_name = None
+    initial_errors = validate_extracted_document_json(parsed) if parsed is not None else []
+    initial_confidence = calculate_confidence(parsed, initial_errors, extraction_source, False)
 
-    if parsed is None and use_model:
+    if should_run_model(parsed, initial_errors, use_model, model_policy, initial_confidence, min_confidence):
+        parser_parsed = parsed
+        parser_source = extraction_source
+        parser_errors = initial_errors
+        parser_confidence = initial_confidence
         model_name, (model, tokenizer) = get_model(model_choice)
         raw_model_response = generate_with_loaded_model(model, tokenizer, ocr_text, max_new_tokens)
         model_parsed, _ = extract_json(raw_model_response)
         parsed = finalize_invoice_json(model_parsed, ocr_text)
         extraction_source = "model"
+        model_errors = validate_extracted_document_json(parsed)
+        model_confidence = calculate_confidence(parsed, model_errors, extraction_source, True)
+        if parser_parsed is not None and not parser_errors and parser_confidence >= model_confidence:
+            parsed = parser_parsed
+            extraction_source = parser_source
+            raw_model_response = None
 
     if parsed is None:
         parsed = finalize_invoice_json(None, ocr_text)
 
     errors = validate_extracted_document_json(parsed)
+    used_model = extraction_source == "model"
     return {
         "ok": not errors,
         "source": extraction_source,
         "model": model_name,
+        "confidence": calculate_confidence(parsed, errors, extraction_source, used_model),
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
         "errors": errors,
         "data": parsed,
@@ -226,18 +322,37 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             return
 
         try:
+            request_id = str(uuid.uuid4())
             request = self.read_extract_request()
             result = extract_document(
                 request["ocr_text"],
                 use_model=request["use_model"],
                 model_choice=request["model"],
                 max_new_tokens=request["max_new_tokens"],
+                model_policy=request["model_policy"],
+                min_confidence=request["min_confidence"],
             )
             result["input"] = {
                 "filename": request["filename"],
                 "text_extractor": request["text_extractor"],
                 "ocr_text_length": len(request["ocr_text"]),
             }
+            result["request_id"] = request_id
+            append_log(
+                {
+                    "request_id": request_id,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "ok": result["ok"],
+                    "source": result["source"],
+                    "model": result["model"],
+                    "confidence": result["confidence"],
+                    "elapsed_ms": result["elapsed_ms"],
+                    "errors": result["errors"],
+                    "input": result["input"],
+                    "document_type": result["data"].get("document_type") if isinstance(result["data"], dict) else None,
+                    "tipo_comprobante": result["data"].get("tipo_comprobante") if isinstance(result["data"], dict) else None,
+                }
+            )
             json_response(self, HTTPStatus.OK if result["ok"] else HTTPStatus.UNPROCESSABLE_ENTITY, result)
         except ValueError as error:
             json_response(self, HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(error)})
@@ -289,8 +404,15 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             raise ValueError("model debe ser 'base' o 'lora'.")
 
         use_model = parse_bool(get_first(fields, query, "use_model", False), default=False)
+        model_policy = str(get_first(fields, query, "model_policy", "fallback") or "fallback")
+        if model_policy not in {"fallback", "low_confidence", "always"}:
+            raise ValueError("model_policy debe ser 'fallback', 'low_confidence' o 'always'.")
         force_ocr = parse_bool(get_first(fields, query, "force_ocr", False), default=False)
         max_new_tokens = parse_int(get_first(fields, query, "max_new_tokens", 900), 900)
+        try:
+            min_confidence = float(get_first(fields, query, "min_confidence", 0.82))
+        except (TypeError, ValueError):
+            min_confidence = 0.82
         ocr_lang = str(get_first(fields, query, "ocr_lang", DEFAULT_OCR_LANG) or DEFAULT_OCR_LANG)
         ocr_dpi = parse_int(get_first(fields, query, "ocr_dpi", DEFAULT_OCR_DPI), DEFAULT_OCR_DPI)
         ocr_text = get_first(fields, query, "ocr_text", "")
@@ -319,6 +441,8 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             "ocr_text": str(ocr_text).strip(),
             "use_model": use_model,
             "model": model,
+            "model_policy": model_policy,
+            "min_confidence": min_confidence,
             "max_new_tokens": max_new_tokens,
         }
 
@@ -344,6 +468,10 @@ def main():
     print(f"Factura Training API escuchando en http://{args.host}:{args.port}")
     print("Healthcheck: GET /health")
     print("Extraccion:  POST /extract con multipart field file=@factura.pdf")
+    if API_KEY:
+        print("API key: requerida por header X-API-Key")
+    if LOG_FILE:
+        print(f"Logs JSONL: {LOG_FILE}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
