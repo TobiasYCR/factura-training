@@ -204,6 +204,7 @@ def main():
                 "ok_schema": is_valid,
                 "exact": is_exact,
                 "type": "external" if is_external else "arca",
+                "predicted": predicted,
                 "field_matches": field_matches,
                 "field_total": field_count,
                 "field_accuracy": round(field_matches / field_count, 4) if field_count else 0,
