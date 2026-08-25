@@ -76,7 +76,7 @@ python scripts/evaluate_real_dataset.py --eval-file data/real_eval.jsonl --model
 Resumen de errores:
 
 ```bash
-python scripts/analyze_eval_results.py data/eval_results_production.jsonl
+python scripts/analyze_eval_results.py data/eval_results_production.jsonl --eval-file data/real_eval.jsonl
 ```
 
 ## 6. API y despliegue

@@ -384,6 +384,134 @@ def first_match(pattern, text, flags=0):
     return match.group(1).strip() if match else None
 
 
+def clean_external_line(line):
+    line = re.sub(r"\s+", " ", str(line)).strip(" ,;")
+    return line or None
+
+
+def extract_external_buyer_details(text):
+    buyer_block = (
+        first_match(r"FACTURAR A:\s*(.*?)(?:\nPAGO:|\nPago:|\nPAYMENT:|\nSaldo|\nTotal|\nREFERENCIA)", text, re.IGNORECASE | re.DOTALL)
+        or first_match(r"BILL TO:?\s*(.*?)(?:\nPAYMENT:|\nPayment|\nPrevious Balance|\nBalance Due|\nTotal)", text, re.IGNORECASE | re.DOTALL)
+        or first_match(r"Customer:\s*(.*?)(?:\nInvoice Number:|\nIssue Date:|\nDue Date:|\nQuantity|\nPayment Method)", text, re.IGNORECASE | re.DOTALL)
+        or first_match(r"PARA:\s*(.*?)(?:\nFECHA|\nTOTAL|\nDETALLE|\nDESCRIPCION)", text, re.IGNORECASE | re.DOTALL)
+        or first_match(r"Cliente:\s*(.*?)(?:\nFecha|\nTotal|\nDetalle|\nDescripcion)", text, re.IGNORECASE | re.DOTALL)
+        or ""
+    )
+    lines = [clean_external_line(line) for line in buyer_block.splitlines()]
+    lines = [line for line in lines if line and not line.lower().startswith(("id fiscal:", "tax id:", "r.f.c"))]
+    tax_id = (
+        first_match(r"ID fiscal:\s*([^\n]+)", buyer_block, re.IGNORECASE)
+        or first_match(r"Tax ID:\s*([^\n]+)", buyer_block, re.IGNORECASE)
+        or first_match(r"\b(?:CUIT|RUT|RUC|R\.F\.C\.?)\s*:?\s*([0-9A-Z.-]+)", buyer_block, re.IGNORECASE)
+        or first_match(r"\b(30[-\s]?\d{8}[-\s]?\d|\d{11})\b", buyer_block)
+    )
+    phone = next((line for line in lines if line.startswith("+") or re.fullmatch(r"[\d .()+-]{7,}", line)), None)
+    business_name = next(
+        (
+            line
+            for line in lines
+            if any(marker in line.upper() for marker in ("S.A", "SA", "SRL", "TECH", "CONSULTING", "LTDA", "S.R.L"))
+        ),
+        None,
+    )
+    name = lines[0] if lines else business_name
+    address_lines = [
+        line
+        for line in lines[1:]
+        if line != business_name
+        and line != phone
+        and not line.startswith("+")
+        and not re.fullmatch(r"[\d .()+-]{7,}", line)
+    ]
+    country = None
+    if re.search(r"\bArgentina\b", buyer_block, re.IGNORECASE):
+        country = "Argentina"
+    elif re.search(r"\bUruguay\b", buyer_block, re.IGNORECASE):
+        country = "Uruguay"
+    elif re.search(r"\bMexico|México\b", buyer_block, re.IGNORECASE):
+        country = "Mexico"
+
+    return {
+        "name": name,
+        "business_name": business_name or name,
+        "tax_id": digits(tax_id) if tax_id else None,
+        "vat_number": None,
+        "address": ", ".join(address_lines) if address_lines else None,
+        "country": country,
+        "phone": phone,
+    }
+
+
+def merge_external_party(primary, fallback):
+    primary = primary if isinstance(primary, dict) else {}
+    fallback = fallback if isinstance(fallback, dict) else {}
+    return {key: primary.get(key) if primary.get(key) is not None else fallback.get(key) for key in EXTERNAL_PARTY_KEYS}
+
+
+def extract_external_payment_details(text, total=None):
+    paid = (
+        parse_money(first_match(r"Pago recibido\s*\(?\$?\s*([\d.,\s]+)\)?", text, re.IGNORECASE))
+        or parse_money(first_match(r"Received Payment\s*\(?\$?\s*([\d.,\s]+)\)?", text, re.IGNORECASE))
+        or parse_money(first_match(r"\bPaid\s+(?:USD|ARS|EUR)?\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+        or parse_money(first_match(r"Pago\s*:?\s*(?:USD|ARS|EUR)?\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+    )
+    balance_due = (
+        parse_money(first_match(r"Saldo adeudado\s*\([A-Z]{3}\)\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+        or parse_money(first_match(r"Balance Due\s*(?:\([A-Z]{3}\))?\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+        or parse_money(first_match(r"\bBalance\s*\$?\s*([\d.,\s]+)", text, re.IGNORECASE))
+    )
+    if paid is None and balance_due == 0 and total is not None:
+        paid = total
+    if balance_due is None and paid is not None and total is not None:
+        balance_due = round_money(total - paid)
+
+    payment = re.search(
+        r"(?:PAGO|PAYMENT):\s*(?P<brand>[A-Za-z]+).*?(?P<last4>\d{4})\s+\$?\s*(?P<amount>[\d.,\s]+)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    return {
+        "paid": paid,
+        "balance_due": balance_due,
+        "payment": {
+            "method": "card" if payment else None,
+            "card_brand": payment.group("brand") if payment else None,
+            "card_last4": payment.group("last4") if payment else None,
+            "amount": parse_money(payment.group("amount")) if payment else paid,
+        },
+        "status": "paid" if paid is not None and balance_due == 0 else None,
+    }
+
+
+def extract_generic_external_items(text):
+    items = []
+    section = (
+        first_match(r"(?:Duraci\S+n|Plazo|Term)\s+Producto\s+Cantidad\s*(.*?)(?:\nTotal|\nREFERENCIA)", text, re.IGNORECASE | re.DOTALL)
+        or first_match(r"(?:Quantity|Cantidad)\s+(?:Description|Descripcion|Descripci\S+n).*?\n(.*?)(?:\nTotal|\nPayment Method|\nBank Details)", text, re.IGNORECASE | re.DOTALL)
+        or ""
+    )
+    for line in [line.strip() for line in section.splitlines() if line.strip()]:
+        match = re.match(r"(?:(?P<term>\d+\s+\S+)\s+)?(?P<description>.+?)\s+\$?\s*(?P<amount>[\d.,]+)(?:\s*(?:USD|ARS|EUR))?$", line)
+        if not match:
+            continue
+        description = clean_external_line(match.group("description"))
+        amount = parse_money(match.group("amount"))
+        if not description or amount is None:
+            continue
+        items.append(
+            {
+                "description": description,
+                "quantity": 1,
+                "unit_price": amount,
+                "amount": amount,
+                "term": match.group("term"),
+                "reference": None,
+            }
+        )
+    return items
+
+
 def parse_godaddy_english_receipt_ocr(ocr_text):
     text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
     upper_text = text.upper()
@@ -1156,6 +1284,14 @@ def parse_generic_external_invoice_ocr(ocr_text):
     )
     if not buyer_name:
         buyer_name = first_match(r"Customer:\s*([^\n]+)", text, re.IGNORECASE)
+    buyer_details = extract_external_buyer_details(text)
+    payment_details = extract_external_payment_details(text, total=total)
+    generic_items = extract_generic_external_items(text)
+    paid = payment_details["paid"]
+    balance_due = payment_details["balance_due"]
+    if balance_due is None:
+        balance_due = total
+    document_status = payment_details["status"]
 
     return normalize_external_document(
         {
@@ -1169,37 +1305,36 @@ def parse_generic_external_invoice_ocr(ocr_text):
                 "country": None,
                 "phone": first_match(r"Tel[eé]fono:\s*([^\n]+)", text, re.IGNORECASE),
             },
-            "buyer": {
-                "name": buyer_name,
-                "business_name": buyer_name,
-                "tax_id": first_match(r"\b(?:RUC|CUIT|N\.I\.F\.):\s*([0-9-]+)", text, re.IGNORECASE),
-                "vat_number": None,
-                "address": first_match(r"(?:Domicilio|Direcci[oó]n)\s*:?\s*([^\n]+)", text, re.IGNORECASE),
-                "country": None,
-                "phone": None,
-            },
+            "buyer": merge_external_party(
+                {
+                    "name": buyer_name,
+                    "business_name": buyer_name,
+                    "tax_id": first_match(r"\b(?:RUC|CUIT|N\.I\.F\.):\s*([0-9-]+)", text, re.IGNORECASE),
+                    "vat_number": None,
+                    "address": first_match(r"(?:Domicilio|Direcci[oó]n)\s*:?\s*([^\n]+)", text, re.IGNORECASE),
+                    "country": None,
+                    "phone": None,
+                },
+                buyer_details,
+            ),
             "document": {
                 "title": "FACTURA" if "FACTURA" in upper_text else "INVOICE",
                 "number": number,
                 "date": parse_document_date(date),
                 "account_number": None,
-                "customer_number": first_match(r"N[uú]mero de cliente:\s*(\d+)", text, re.IGNORECASE),
-                "status": None,
+                "customer_number": first_match(r"N[uú]mero de cliente:\s*(\d+)", text, re.IGNORECASE)
+                or first_match(r"CUSTOMER\s*#:?\s*(\d+)", text, re.IGNORECASE),
+                "status": document_status,
             },
             "currency": currency,
             "subtotal": parse_money(subtotal_text) if subtotal_text else None,
             "taxes": parse_money(taxes_text) if taxes_text else None,
             "fees": 0.0,
             "total": total,
-            "paid": None,
-            "balance_due": total,
-            "payment": {
-                "method": None,
-                "card_brand": None,
-                "card_last4": None,
-                "amount": None,
-            },
-            "items": [],
+            "paid": paid,
+            "balance_due": balance_due,
+            "payment": payment_details["payment"],
+            "items": generic_items,
             "notes": "Generic external invoice parsed from observed PDF text. Not an ARCA invoice.",
         }
     )

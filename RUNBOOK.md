@@ -228,8 +228,8 @@ python scripts/evaluate_real_dataset.py \
 Analizar errores:
 
 ```bash
-python scripts/analyze_eval_results.py data/eval_results_production.jsonl
-python scripts/analyze_eval_results.py data/eval_results_model.jsonl
+python scripts/analyze_eval_results.py data/eval_results_production.jsonl --eval-file data/real_eval.jsonl
+python scripts/analyze_eval_results.py data/eval_results_model.jsonl --eval-file data/real_eval.jsonl
 ```
 
 Interpretacion:

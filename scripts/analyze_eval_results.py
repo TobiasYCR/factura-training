@@ -18,9 +18,30 @@ def clean_field(field):
     return field.replace(".__len__", "")
 
 
+def filename_from_input(text):
+    first_line = str(text).splitlines()[0].strip() if str(text).splitlines() else ""
+    if first_line.lower().startswith("archivo:"):
+        return first_line.split(":", 1)[1].strip()
+    return None
+
+
+def load_eval_filenames(path):
+    if not path:
+        return {}
+    filenames = {}
+    with Path(path).open("r", encoding="utf-8") as file:
+        for line_number, line in enumerate(file, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            filenames[line_number] = filename_from_input(row.get("input", ""))
+    return filenames
+
+
 def main():
     parser = argparse.ArgumentParser(description="Resume errores y campos flojos de una evaluacion JSONL.")
     parser.add_argument("results_file", help="Archivo generado por scripts/evaluate_real_dataset.py")
+    parser.add_argument("--eval-file", help="Archivo real_eval.jsonl para recuperar nombres de archivo si el resultado no los trae.")
     parser.add_argument("--top", type=int, default=25)
     args = parser.parse_args()
 
@@ -28,6 +49,7 @@ def main():
     if not rows:
         raise SystemExit(f"No hay filas en {args.results_file}")
 
+    filenames = load_eval_filenames(args.eval_file)
     total = len(rows)
     exact = sum(1 for row in rows if row.get("exact"))
     schema_ok = sum(1 for row in rows if row.get("ok_schema"))
@@ -51,7 +73,7 @@ def main():
             (
                 row.get("field_accuracy", 0),
                 row.get("line"),
-                row.get("filename"),
+                row.get("filename") or filenames.get(row.get("line")),
                 row.get("type", "unknown"),
                 row.get("field_matches", 0),
                 row.get("field_total", 0),
