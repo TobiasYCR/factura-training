@@ -582,8 +582,17 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
         or first_match(r"Receipt\s*(?:№|No\.?|N[°ºo.]*)?\s*(\d+)", text, re.IGNORECASE | re.DOTALL)
         or first_match(r"(?:№|No\.?|N[°ºo.]*)\s*(\d{8,12})", text, re.IGNORECASE)
     )
-    date = first_match(r"DATE:?\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})", text, re.IGNORECASE)
-    customer_number = first_match(r"CUSTOMER\s*#:?\s*(\d+)", text, re.IGNORECASE)
+    date = (
+        first_match(r"DATE:?\s*([A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4})", text, re.IGNORECASE)
+        or first_match(
+            r"FECHA:?\s*(\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\s+de\s+[A-Za-záéíóúñ.]+\s+de\s+\d{4})",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    customer_number = first_match(r"CUSTOMER\s*#:?\s*(\d+)", text, re.IGNORECASE) or first_match(
+        r"N\S*MERO DE CLIENTE:?\s*(\d+)", text, re.IGNORECASE
+    )
     if not number:
         return None
 
@@ -662,7 +671,7 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
                 "phone": phone,
             },
             "document": {
-                "title": "Receipt",
+                "title": "Recibo" if re.search(r"\bRecibo\b", text, re.IGNORECASE) else "Receipt",
                 "number": number,
                 "date": parse_document_date(date),
                 "account_number": None,
