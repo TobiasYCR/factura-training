@@ -45,6 +45,7 @@ def process_file(path, args):
     started = time.perf_counter()
     result = {
         "file": str(path),
+        "filename": path.name,
         "ok": False,
         "elapsed_ms": None,
         "text_extractor": None,
