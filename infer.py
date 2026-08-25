@@ -2595,8 +2595,6 @@ def normalize_external_document(parsed):
         provider_phone = normalized["provider"].get("phone")
         if provider_phone and re.search(r"\(?480\)?\s*[- .]?463\s*[- .]?8300", provider_phone):
             normalized["provider"]["phone"] = None
-        elif not provider_phone and (normalized.get("document") or {}).get("title") == "Recibo":
-            normalized["provider"]["phone"] = "(011) 5984-0780"
 
     document = normalized.get("document")
     if not isinstance(document, dict):
