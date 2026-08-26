@@ -208,6 +208,31 @@ Fecha de Vto. de CAE: 18/04/2021
 
         self.assertEqual(parsed["descripcion"], "Consultoria SAP - 2021/04")
 
+    def test_arca_description_removes_noisy_quantity_after_service_text(self):
+        text = """Archivo: sample 20341566542_011_00001_00000009.pdf
+ORIGINAL
+TORRES MIGUEL EZEQUIEL
+C
+FACTURA
+COD. 011
+Punto de Venta: 00001 Comp. Nro: 00000009
+Fecha de Emisión: 07/04/2021
+CUIT: 20341566542
+Razón Social: TORRES MIGUEL EZEQUIEL
+Condición frente al IVA: Responsable Monotributo
+CUIT: 30715444530 Apellido y Nombre / Razón Social: CS TECH CONSULTING S.A.
+Condición frente al IVA: IVA Responsable Inscripto
+Condición de venta: Contado
+eago [Poco serten co Ju Posen [o] o | stan; Servicios profesionales 1,00 tras y unidades
+Subtotal: $ 100000,00
+Importe Total: $ 100000,00
+CAE N°: 71142380280051
+Fecha de Vto. de CAE: 17/04/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["descripcion"], "Servicios profesionales")
+
     def test_osde_reference_becomes_display_description(self):
         text = """Archivo: 01 Enero - Osde 0070-00125470.pdf
 OSDE
