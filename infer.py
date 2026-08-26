@@ -446,7 +446,7 @@ def extract_arca_document_code(text):
         return int(filename_code)
 
     code_text = first_match(
-        r"\bC(?:[ÓÓO]D|OD|ÓDIGO|ODIGO)\.?\s*:?\s*0*(\d{1,3})\b",
+        r"\bC(?:[ÓÓO]D|OD|ÓDIGO|ODIGO)\.?(?:\s*N[°ºo.]*)?\s*:?\s*0*(\d{1,3})\b",
         text,
         re.IGNORECASE,
     )
@@ -537,15 +537,41 @@ def extract_arca_items(text):
     in_table = False
     items = []
     seen = set()
+    pending_description = None
     for line in lines:
         upper = line.upper()
-        if re.search(r"CÓDIGO|CODIGO|PRODUCTO\s*/?\s*SERVICIO", upper):
+        if re.search(r"C[ÓO�]?DIGO|PRODUCTO\s*/?\s*SERVICIO", upper):
             in_table = True
+            pending_description = None
             continue
         if not in_table:
             continue
         if re.search(r"^(SUBTOTAL|IMPORTE\s+OTROS|IMPORTE\s+TOTAL|CAE|FECHA\s+DE\s+VTO)", upper):
             break
+
+        quantity_row = None
+        if pending_description:
+            quantity_row = re.match(
+                r"^(?P<quantity>\d+(?:[,.]\d+)?)\s+(?P<unit>[A-Za-zÁÉÍÓÚÜÑáéíóúüñ./-]+)\s+"
+                r"(?P<numbers>-?[\d.,]+(?:\s+-?[\d.,]+){2,})$",
+                line,
+            )
+            if quantity_row:
+                number_tokens = re.findall(r"-?[\d.,]+", quantity_row.group("numbers"))
+                match_data = {
+                    "description": pending_description,
+                    "quantity": quantity_row.group("quantity"),
+                    "unit_price": number_tokens[0],
+                    "amount": next(
+                        (token for token in reversed(number_tokens) if parse_ar_money(token)),
+                        number_tokens[-1],
+                    ),
+                }
+                pending_description = None
+            else:
+                match_data = None
+        else:
+            match_data = None
 
         match = re.match(
             r"^(?:\d{1,3}\s+)?(?P<description>.+?)\s+"
@@ -554,7 +580,9 @@ def extract_arca_items(text):
             r"(?P<discount_amount>-?[\d.,]+)\s+(?P<amount>-?[\d.,]+)$",
             line,
         )
-        if not match:
+        if match and match_data is None:
+            match_data = match.groupdict()
+        if match_data is None:
             loose_match = re.match(
                 r"^(?:\d{1,3}\s+)?(?P<description>.+?)\s+"
                 r"(?P<quantity>\d+(?:[,.]\d+)?)\s+(?P<unit>[A-Za-zÁÉÍÓÚÜÑáéíóúüñ./-]+)\s+"
@@ -562,6 +590,8 @@ def extract_arca_items(text):
                 line,
             )
             if not loose_match:
+                if not re.fullmatch(r"\d{1,3}", line) and not re.search(r"^(?:CANTIDAD|U\.?\s*MEDIDA|PRECIO|SUBTOTAL)\b", upper):
+                    pending_description = clean_arca_name(line)
                 continue
             number_tokens = re.findall(r"-?[\d.,]+", loose_match.group("numbers"))
             if len(number_tokens) < 3:
@@ -575,8 +605,7 @@ def extract_arca_items(text):
                     number_tokens[-1],
                 ),
             }
-        else:
-            match_data = match.groupdict()
+
         description = clean_arca_name(match_data["description"])
         if not description or description.upper() in {"PRODUCTO / SERVICIO", "PRODUCTO SERVICIO"}:
             continue
@@ -2717,6 +2746,138 @@ def parse_lenovo_arca_ocr(text):
     return normalize_invoice_json(parsed)
 
 
+def parse_telecom_fibertel_invoice_ocr(text):
+    upper_text = str(text or "").upper()
+    if not any(marker in upper_text for marker in ("FIBERTEL", "CABLEVISI", "TELECOM ARGENTINA")):
+        return None
+
+    filename_cv = re.search(r"Archivo:.*?\bCV\s+(\d{4,5})-(\d{7,9})\.pdf", text, re.IGNORECASE)
+    number_match = (
+        re.search(r"FACTURA\s*N\S*[:º°]?\s*(\d{4,5})[-\s]+(\d{7,9})", text, re.IGNORECASE)
+        or re.search(r"\b(\d{4,5})[-\s](\d{8,9})\b(?=.{0,140}(?:FECHA|C\.?U\.?I\.?T|Ing\.?\s*Brutos))", text, re.IGNORECASE | re.DOTALL)
+        or filename_cv
+    )
+    if not number_match:
+        return None
+
+    point_of_sale = number_match.group(1).zfill(5)
+    receipt_number = number_match.group(2).zfill(8)[-8:]
+    document_code = extract_arca_document_code(text) or 1
+    letter = {1: "A", 6: "B", 11: "C"}.get(document_code, "A")
+
+    issue_date = (
+        first_match(r"\bFECHA\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})", text, re.IGNORECASE)
+        or first_match(r"Fecha de Emisi\S*n\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})", text, re.IGNORECASE)
+    )
+    provider_cuit = (
+        first_match(r"C\.?\s*U\.?\s*I\.?\s*T\.?\s*:?\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
+        or "30639453738"
+    )
+    receiver_name = (
+        first_match(r"SR/?A\.?\s*:?\s*([^\n]+)", text, re.IGNORECASE)
+        or first_match(r"(CS\s+TECH\s+CONSULTING\s+S?A?\s*CS?)", text, re.IGNORECASE)
+    )
+    receiver_cuit = (
+        first_match(r"CUIT\s*N\S*\.?\s*:?\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
+        or first_match(r"\b(30-71544453-0|30715444530)\b", text)
+    )
+
+    subtotal = (
+        parse_money(first_match(r"Neto\s+Gravado\s+(?:Subtotal\s*)?([\d.,]+)", text, re.IGNORECASE))
+        or parse_money(first_match(r"Neto\s+Gravado.*?\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    )
+    iva_total = (
+        parse_money(first_match(r"I\.?\s*V\.?\s*A\.?\s*21\s*%?\s*([\d.,]+)", text, re.IGNORECASE))
+        or parse_money(first_match(r"IVA\s*21\s*%?\s*([\d.,]+)", text, re.IGNORECASE))
+        or 0.0
+    )
+
+    tributos = []
+    tributos_total = 0.0
+    for line in str(text or "").splitlines():
+        if not re.search(r"PERCEP|IIBB|RG2408", line, re.IGNORECASE):
+            continue
+        amounts = re.findall(r"-?[\d.,]+", line)
+        if not amounts:
+            continue
+        amount = parse_money(amounts[-1])
+        if amount:
+            tributos_total = round_money(tributos_total + amount)
+            tributos.append(
+                {
+                    "codigo": 99,
+                    "descripcion": clean_external_line(line[: line.rfind(amounts[-1])]) or "Percepcion",
+                    "base_imponible": subtotal,
+                    "alicuota": None,
+                    "importe": amount,
+                }
+            )
+
+    calculated_total = None
+    if subtotal is not None:
+        calculated_total = round_money(subtotal + (iva_total or 0) + (tributos_total or 0))
+    fiscal_totals = [
+        parse_money(value)
+        for value in re.findall(r"^\s*(?:Total\s+Factura|TOTAL)\s*:?\s*\$?\s*([\d.,]+)\s*$", text, re.IGNORECASE | re.MULTILINE)
+    ]
+    fiscal_totals = [value for value in fiscal_totals if value is not None]
+    total = calculated_total or (fiscal_totals[-1] if fiscal_totals else None)
+    if calculated_total and fiscal_totals:
+        close_total = next((value for value in reversed(fiscal_totals) if abs(value - calculated_total) <= 1.0), None)
+        total = close_total or calculated_total
+
+    if total is None:
+        return None
+
+    cae = extract_cae(text)
+    due_date = (
+        extract_cae_expiration(text)
+        or parse_document_date(first_match(r"Fecha\s+Vto\.?\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})", text, re.IGNORECASE))
+    )
+    items = extract_arca_concept_items(text)
+    iva = []
+    if iva_total:
+        iva.append({"codigo": 5, "descripcion": "21%", "base_imponible": subtotal, "importe": iva_total})
+
+    parsed = {
+        "tipo_comprobante": f"Factura {letter}",
+        "codigo_comprobante": document_code,
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_document_date(issue_date) if issue_date else None,
+        "emisor": {
+            "nombre": "TELECOM ARGENTINA S.A.",
+            "cuit": provider_cuit,
+            "doc_tipo": 80,
+            "doc_nro": digits(provider_cuit),
+            "condicion_iva": "IVA Responsable Inscripto",
+        },
+        "receptor": {
+            "nombre": clean_arca_name(receiver_name),
+            "cuit": receiver_cuit,
+            "doc_tipo": 80 if receiver_cuit else None,
+            "doc_nro": digits(receiver_cuit),
+            "condicion_iva": "Responsable Inscripto" if receiver_cuit else None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_total,
+        "tributos_total": tributos_total,
+        "impuestos": round_money((iva_total or 0) + (tributos_total or 0)),
+        "total": total,
+        "cae": cae,
+        "fecha_vencimiento_cae": due_date,
+        "iva": iva,
+        "tributos": tributos,
+        "items": items,
+    }
+    return normalize_invoice_json(parsed)
+
+
 def parse_loose_arca_service_ocr(text):
     upper_text = text.upper()
     filename_cv = re.search(r"Archivo:.*?\bCV\s+(\d{4,5})-(\d{7,9})\.pdf", text, re.IGNORECASE)
@@ -3157,6 +3318,10 @@ def parse_structured_arca_ocr(ocr_text):
     lenovo_arca = parse_lenovo_arca_ocr(text)
     if lenovo_arca is not None:
         return lenovo_arca
+
+    telecom_fibertel_invoice = parse_telecom_fibertel_invoice_ocr(text)
+    if telecom_fibertel_invoice is not None:
+        return telecom_fibertel_invoice
 
     osde_debit_note = parse_osde_debit_note_ocr(text)
     if osde_debit_note is not None:

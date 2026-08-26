@@ -83,6 +83,30 @@ class ArcaParserRegressionTests(unittest.TestCase):
 
         self.assertEqual(parsed["descripcion"], "Servicio de Consultoria SAP")
 
+    def test_split_arca_product_service_description_is_recovered(self):
+        text = """Archivo: sample 27229910871_011_00001_00000005.pdf
+ORIGINAL
+VILLODAS ANDREA DANIELA
+FACTURA C COD. 011
+Punto de Venta: 00001 Comp. Nro: 00000005
+Fecha de Emision: 04/01/2021
+CUIT: 27229910871
+Razon Social: VILLODAS ANDREA DANIELA
+Condicion frente al IVA: Responsable Monotributo
+CUIT: 30715444530 Apellido y Nombre / Razon Social: CS TECH CONSULTING S.A.
+Codigo Producto / Servicio Cantidad U. Medida Precio Unit. % Bonif Imp. Bonif. Subtotal
+Servicio de Consultoria SAP
+1,00 unidades 6750,00 0,00 0,00 6750,00
+Subtotal: $ 6750,00
+Importe Total: $ 6750,00
+CAE Nro: 71011847336594
+Fecha de Vto. de CAE: 14/01/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["items"][0]["descripcion"], "Servicio de Consultoria SAP")
+        self.assertEqual(parsed["descripcion"], "Servicio de Consultoria SAP")
+
     def test_osde_reference_becomes_display_description(self):
         text = """Archivo: 01 Enero - Osde 0070-00125470.pdf
 OSDE
@@ -158,6 +182,47 @@ CAE Nro: 71168883477372
         self.assertEqual(
             description,
             "Servicios de televisión, packs premium, internet 100 megas y descuentos correspondientes al período 05-2021.",
+        )
+
+    def test_fibertel_visual_layout_is_parsed(self):
+        text = """Archivo: 04 Abril - CV 8340-04053647.pdf
+Cablevisión Fibertel
+Telecom Argentina S.A.
+La Pampa 2295 P.B
+IVA Responsable Inscripto
+A Codigo N° 01
+FACTURA N°: 8340-04053647
+FECHA: 19-04-2020
+C.U.I.T.:30639453738
+SR/A: TECH CONSULTING SA CS
+CUITN°: 30-71544453-0
+CONCEPTOS IMPORTE
+Cablevisión Flow Box 05-2020 1987,61
+Adicional Cablevision Flow Box 05-2020 196,70
+Servicios de Television Subtotal 2184,31
+Fibertel 100 Megas Wifi 05-2020 2704,14
+Servicios Banda Ancha (SBA) Subtotal 2704,14
+Promoción Combo Mes 6 de 12 12MX47% -2205,12
+Promocion COMBO Subtotal -2205,12
+Neto Gravado Subtotal 2683,33
+I.V.A. 21% 563,50
+PERCEP. IIBB BS. AS. 107,34
+Percep. IVA-RG2408 80,50
+TOTAL $3434,67
+CAE Nro.: 70168206803905
+Fecha Vto.: 29-04-2020
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["codigo_comprobante"], 1)
+        self.assertEqual(parsed["numero_factura"], "08340-04053647")
+        self.assertEqual(parsed["total"], 3434.67)
+        self.assertEqual(parsed["cae"], "70168206803905")
+        self.assertEqual(parsed["iva_porcentaje"], 21.0)
+        self.assertEqual(
+            parsed["descripcion"],
+            "Servicios de televisión, internet 100 megas y descuentos correspondientes al período 05-2020.",
         )
 
     def test_external_product_precedes_reference(self):

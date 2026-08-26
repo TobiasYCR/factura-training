@@ -358,7 +358,12 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                 model_policy=request["model_policy"],
                 min_confidence=request["min_confidence"],
             )
-            result["data"] = add_arca_integration_fields(result["data"], request["ocr_text"])
+            parser_text = (
+                f"Archivo: {request['filename']}\n{request['ocr_text']}"
+                if request["filename"]
+                else request["ocr_text"]
+            )
+            result["data"] = add_arca_integration_fields(result["data"], parser_text)
             result["input"] = {
                 "filename": request["filename"],
                 "text_extractor": request["text_extractor"],
