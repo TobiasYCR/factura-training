@@ -6,6 +6,10 @@ Este documento define el JSON que devuelve el sistema cuando detecta una factura
 
 No se intenta devolver XML/SOAP de ARCA. La salida es un JSON interno, estable y facil de validar.
 
+`numero_factura` conserva el formato tradicional del comprobante. La API agrega
+`numero_factura_completo` e `iva_porcentaje` como campos de integracion para la
+pantalla administrativa, sin reemplazar los campos normalizados originales.
+
 ## 2. Fuente conceptual
 
 El schema se basa en conceptos de comprobantes electronicos ARCA:
@@ -44,6 +48,7 @@ PDF ARCA
 | `punto_venta` | string/null | Punto de venta normalizado a 5 digitos. |
 | `numero_comprobante` | string/null | Numero normalizado a 8 digitos. |
 | `numero_factura` | string/null | Formato `00000-00000000`. |
+| `numero_factura_completo` | string/null | Identificador para integraciones: `CUIT(11)_CODIGO(3)_PUNTO_VENTA(5)_NUMERO(8)`. |
 | `fecha_emision` | string/null | Fecha ISO `YYYY-MM-DD`. |
 | `emisor` | object | Datos del emisor. |
 | `receptor` | object | Datos del receptor. |
@@ -58,6 +63,7 @@ PDF ARCA
 | `total` | number/null | Importe total final. |
 | `cae` | string/null | Codigo de autorizacion electronico. |
 | `fecha_vencimiento_cae` | string/null | Fecha ISO `YYYY-MM-DD`. |
+| `iva_porcentaje` | number/array/null | Porcentaje calculado o informado; puede ser `0`, `21`, `10.5`, `27` o varios porcentajes. |
 | `iva` | array | Detalle de IVA. |
 | `tributos` | array | Detalle de tributos/percepciones. |
 | `items` | array | Detalle de items si el OCR permite extraerlos. |

@@ -13,6 +13,8 @@ from urllib.parse import parse_qs, urlparse
 from infer import (
     BASE_MODEL,
     LORA_MODEL,
+    build_arca_invoice_identifier,
+    derive_iva_percentage,
     extract_json,
     finalize_invoice_json,
     generate_with_loaded_model,
@@ -91,6 +93,21 @@ def document_completeness(data):
     if scalar_total == 0:
         return 0.0
     return scalar_present / scalar_total
+
+
+def add_arca_integration_fields(data):
+    """Expose presentation fields without changing the validated ARCA contract."""
+    if not isinstance(data, dict) or data.get("document_type"):
+        return data
+
+    enriched = dict(data)
+    invoice_identifier = build_arca_invoice_identifier(data)
+    iva_percentage = derive_iva_percentage(data)
+    if invoice_identifier:
+        enriched["numero_factura_completo"] = invoice_identifier
+    if iva_percentage is not None:
+        enriched["iva_porcentaje"] = iva_percentage
+    return enriched
 
 
 def calculate_confidence(parsed, errors, source, used_model):
@@ -283,7 +300,7 @@ def extract_document(
         "confidence": calculate_confidence(parsed, errors, extraction_source, used_model),
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
         "errors": errors,
-        "data": parsed,
+        "data": add_arca_integration_fields(parsed),
         "raw_model_response": raw_model_response,
     }
 
@@ -335,6 +352,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                 model_policy=request["model_policy"],
                 min_confidence=request["min_confidence"],
             )
+            result["data"] = add_arca_integration_fields(result["data"])
             result["input"] = {
                 "filename": request["filename"],
                 "text_extractor": request["text_extractor"],

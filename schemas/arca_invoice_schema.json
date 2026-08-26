@@ -43,6 +43,10 @@
       "type": ["string", "null"],
       "pattern": "^\\d{4,5}-\\d{8}$"
     },
+    "numero_factura_completo": {
+      "type": ["string", "null"],
+      "pattern": "^\\d{11}_\\d{3}_\\d{5}_\\d{8}$"
+    },
     "fecha_emision": {
       "type": ["string", "null"],
       "format": "date"
@@ -69,6 +73,10 @@
     "fecha_vencimiento_cae": {
       "type": ["string", "null"],
       "format": "date"
+    },
+    "iva_porcentaje": {
+      "type": ["number", "array", "null"],
+      "items": { "type": "number" }
     },
     "iva": {
       "type": "array",

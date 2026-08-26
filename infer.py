@@ -48,6 +48,7 @@ REQUIRED_KEYS = {
     "tributos",
     "items",
 }
+OPTIONAL_KEYS = {"numero_factura_completo", "iva_porcentaje"}
 PERSON_KEYS = {"nombre", "doc_tipo", "doc_nro", "cuit", "condicion_iva"}
 IVA_CODE_BY_RATE = {10.5: 4, 21.0: 5, 27.0: 6}
 EXTERNAL_DOCUMENT_KEYS = (
@@ -382,6 +383,258 @@ def parse_quantity(value):
 def first_match(pattern, text, flags=0):
     match = re.search(pattern, text, flags)
     return match.group(1).strip() if match else None
+
+
+def normalize_invoice_code(value=None, letter=None):
+    """Return the three-digit ARCA code from a code or invoice letter."""
+    if value is not None:
+        digits_value = digits(value)
+        if digits_value:
+            return digits_value.zfill(3)[-3:]
+
+    return {
+        "A": "001",
+        "B": "006",
+        "C": "011",
+        "M": "051",
+    }.get(str(letter or "").strip().upper())
+
+
+def build_arca_invoice_identifier(parsed):
+    if not isinstance(parsed, dict) or parsed.get("document_type"):
+        return None
+    emitter = parsed.get("emisor") if isinstance(parsed.get("emisor"), dict) else {}
+    cuit = digits(emitter.get("cuit") or emitter.get("doc_nro"))
+    point_of_sale = digits(parsed.get("punto_venta"))
+    receipt_number = digits(parsed.get("numero_comprobante"))
+    type_match = re.search(r"\b([ABCM])\b", str(parsed.get("tipo_comprobante") or ""), re.IGNORECASE)
+    letter = type_match.group(1) if type_match else None
+    code = normalize_invoice_code(parsed.get("codigo_comprobante"), letter)
+    if not (cuit and len(cuit) == 11 and code and point_of_sale and receipt_number):
+        return None
+    return f"{cuit}_{code}_{point_of_sale.zfill(5)}_{receipt_number.zfill(8)}"
+
+
+def derive_iva_percentage(parsed):
+    if not isinstance(parsed, dict) or parsed.get("document_type"):
+        return None
+    rates = []
+    for item in parsed.get("iva") or []:
+        rate = rate_from_description(item.get("descripcion")) if isinstance(item, dict) else None
+        if rate is not None and rate not in rates:
+            rates.append(rate)
+    if rates:
+        return rates[0] if len(rates) == 1 else rates
+
+    iva_total = as_number(parsed.get("iva_total"))
+    subtotal = as_number(parsed.get("subtotal"))
+    if iva_total is not None and subtotal and iva_total > 0:
+        return round((iva_total / subtotal) * 100, 2)
+    if iva_total == 0:
+        return 0
+    return None
+
+
+def extract_arca_document_code(text):
+    filename_code = first_match(
+        r"Archivo:.*?\b\d{10,11}_(\d{1,3})_\d{4,5}_\d{7,9}\.pdf",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if filename_code:
+        return int(filename_code)
+
+    code_text = first_match(
+        r"\bC(?:[ÓÓO]D|OD|ÓDIGO|ODIGO)\.?\s*:?\s*0*(\d{1,3})\b",
+        text,
+        re.IGNORECASE,
+    )
+    if code_text:
+        return int(code_text)
+    return None
+
+
+def extract_cae(text):
+    """Extract a 14-digit CAE without confusing it with other long numbers."""
+    patterns = (
+        r"\bC\s*\.?\s*A\s*\.?\s*E\s*\.?\s*N[^0-9]{0,8}((?:\d\s*){14})\b",
+        r"\bC\s*\.?\s*A\s*\.?\s*E\s*\.?[^0-9]{0,8}((?:\d\s*){14})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, str(text or ""), flags=re.IGNORECASE)
+        if match:
+            value = digits(match.group(1))
+            if len(value) == 14:
+                return value
+
+    label = re.compile(r"\bC\s*\.?\s*A\s*\.?\s*E\s*\.?", re.IGNORECASE)
+    source = str(text or "")
+    for match in label.finditer(source):
+        fragment = source[match.end() : match.end() + 320]
+        number_match = re.search(r"(?<!\d)((?:\d\s*){14})(?!\d)", fragment)
+        if number_match:
+            value = digits(number_match.group(1))
+            if len(value) == 14:
+                return value
+    return None
+
+
+def extract_cae_expiration(text):
+    label = re.compile(
+        r"(?:FECHA\s+DE\s+VTO\.?\s+DE\s+CAE|FECHA\s+DE\s+VENCIMIENTO\s+DE\s+CAE|"
+        r"VTO\.?\s+CAE|VENCIMIENTO\s+CAE)",
+        re.IGNORECASE,
+    )
+    for match in label.finditer(str(text or "")):
+        fragment = str(text or "")[match.end() : match.end() + 140]
+        date_match = re.search(r"\b(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b", fragment)
+        if date_match:
+            normalized = parse_document_date(date_match.group(1))
+            if normalized:
+                return normalized
+    return None
+
+
+def deduplicate_document_copies(text):
+    """Use only the ORIGINAL block and discard every later copy completely."""
+    text = str(text or "")
+    original = re.search(r"\bORIGINAL\b", text, re.IGNORECASE)
+    if not original:
+        return text
+
+    after_original = text[original.end() :]
+    repeated_copy = re.search(r"\b(?:DUPLICADO|TRIPLICADO)\b", after_original, re.IGNORECASE)
+    if not repeated_copy:
+        return text
+    return (text[: original.end() + repeated_copy.start()]).rstrip()
+
+
+def clean_arca_name(value):
+    if not value:
+        return None
+    value = re.sub(r"^[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+", "", str(value))
+    value = re.sub(r"\s+", " ", value).strip(" :;-|")
+    return value or None
+
+
+def extract_arca_emitter_name(text):
+    patterns = (
+        r"Raz[oóÃ³]n\s+Social\s*:\s*(.*?)(?=\s+Fecha\s+de\s+Emisi[oóÃ³]n|\s+Domicilio|\s+Condici[oóÃ³]n|\n|$)",
+        r"(?:ORIGINAL|DUPLICADO|TRIPLICADO)\s*\n\s*([A-ZÁÉÍÓÚÜÑ][^\n]{2,})",
+    )
+    for pattern in patterns:
+        value = first_match(pattern, text, re.IGNORECASE | re.DOTALL)
+        value = clean_arca_name(value)
+        if value and value.lower() not in {"domicilio", "domicilio comercial", "condicion frente al iva"} and not re.search(r"^(FACTURA|RECIBO|PUNTO|FECHA|CUIT)\b", value, re.IGNORECASE):
+            return value
+    return None
+
+
+def extract_arca_items(text):
+    lines = [re.sub(r"\s+", " ", line).strip() for line in str(text or "").splitlines()]
+    in_table = False
+    items = []
+    seen = set()
+    for line in lines:
+        upper = line.upper()
+        if re.search(r"CÓDIGO|CODIGO|PRODUCTO\s*/?\s*SERVICIO", upper):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if re.search(r"^(SUBTOTAL|IMPORTE\s+OTROS|IMPORTE\s+TOTAL|CAE|FECHA\s+DE\s+VTO)", upper):
+            break
+
+        match = re.match(
+            r"^(?:\d{1,3}\s+)?(?P<description>.+?)\s+"
+            r"(?P<quantity>\d+(?:[,.]\d+)?)\s+(?P<unit>[A-Za-zÁÉÍÓÚÜÑáéíóúüñ./-]+)\s+"
+            r"(?P<unit_price>-?[\d.,]+)\s+(?P<discount>-?[\d.,]+)\s+"
+            r"(?P<discount_amount>-?[\d.,]+)\s+(?P<amount>-?[\d.,]+)$",
+            line,
+        )
+        if not match:
+            loose_match = re.match(
+                r"^(?:\d{1,3}\s+)?(?P<description>.+?)\s+"
+                r"(?P<quantity>\d+(?:[,.]\d+)?)\s+(?P<unit>[A-Za-zÁÉÍÓÚÜÑáéíóúüñ./-]+)\s+"
+                r"(?P<numbers>-?[\d.,]+(?:\s+-?[\d.,]+){2,})$",
+                line,
+            )
+            if not loose_match:
+                continue
+            number_tokens = re.findall(r"-?[\d.,]+", loose_match.group("numbers"))
+            if len(number_tokens) < 3:
+                continue
+            match_data = {
+                "description": loose_match.group("description"),
+                "quantity": loose_match.group("quantity"),
+                "unit_price": number_tokens[0],
+                "amount": next(
+                    (token for token in reversed(number_tokens) if parse_ar_money(token)),
+                    number_tokens[-1],
+                ),
+            }
+        else:
+            match_data = match.groupdict()
+        description = clean_arca_name(match_data["description"])
+        if not description or description.upper() in {"PRODUCTO / SERVICIO", "PRODUCTO SERVICIO"}:
+            continue
+        item_key = (description, match_data["quantity"], match_data["amount"])
+        if item_key in seen:
+            continue
+        seen.add(item_key)
+        items.append(
+            {
+                "descripcion": description,
+                "cantidad": parse_quantity(match_data["quantity"]),
+                "precio_unitario": parse_ar_money(match_data["unit_price"]),
+                "importe": parse_ar_money(match_data["amount"]),
+            }
+        )
+    return items
+
+
+def first_labeled_money(label_pattern, text, flags=re.IGNORECASE, radius=100):
+    source = str(text or "")
+    label = re.search(label_pattern, source, flags)
+    if not label:
+        return None
+    fragment = source[label.end() : label.end() + radius]
+    match = re.search(r"(?<!\d)(-?[\d.,]+)(?!\d)", fragment)
+    return parse_ar_money(match.group(1)) if match else None
+
+
+def enrich_arca_parser_result(parsed, text):
+    if not isinstance(parsed, dict) or parsed.get("document_type"):
+        return parsed
+
+    normalized = dict(parsed)
+    normalized_text = deduplicate_document_copies(text)
+
+    if not normalized.get("cae"):
+        normalized["cae"] = extract_cae(normalized_text)
+    if not normalized.get("fecha_vencimiento_cae"):
+        normalized["fecha_vencimiento_cae"] = extract_cae_expiration(normalized_text)
+
+    code = extract_arca_document_code(normalized_text)
+    if code in {1, 6, 11}:
+        normalized["codigo_comprobante"] = code
+        letter = {1: "A", 6: "B", 11: "C"}[code]
+        current_type = str(normalized.get("tipo_comprobante") or "Factura")
+        if re.search(r"factura\s+[ABC]", current_type, re.IGNORECASE):
+            normalized["tipo_comprobante"] = re.sub(
+                r"Factura\s+[ABC]", f"Factura {letter}", current_type, flags=re.IGNORECASE
+            )
+
+    emitter = normalized.get("emisor")
+    if isinstance(emitter, dict):
+        emitter = dict(emitter)
+        emitter["nombre"] = clean_arca_name(emitter.get("nombre")) or extract_arca_emitter_name(normalized_text)
+        normalized["emisor"] = emitter
+
+    if not normalized.get("items"):
+        normalized["items"] = extract_arca_items(normalized_text)
+
+    return normalize_invoice_json(normalized)
 
 
 def first_money(patterns, text, flags=re.IGNORECASE):
@@ -1708,7 +1961,10 @@ def parse_loose_arca_cae_ocr(text):
         re.search(r"Factura\s+([ABC])\s+(\d{4,5})-(\d{8})", text, re.IGNORECASE)
         or re.search(r"Factura:\s*(\d{4,5})-(\d{8})", text, re.IGNORECASE)
     )
-    numbers = re.search(r"Punto de Venta:\s*(\d+)\s+Comp\.?\s*Nro:\s*(\d+)", text, re.IGNORECASE)
+    numbers = (
+        re.search(r"Punto de Venta:\s*(\d+)\s+Comp\.?\s*Nro:\s*(\d+)", text, re.IGNORECASE)
+        or re.search(r"Punto de Venta:\s*Comp\.?\s*Nro:\s*(\d+)\s+(\d+)", text, re.IGNORECASE)
+    )
     invoice_no_header = re.search(
         r"\b([ABC])\W{0,30}(?:C\S*d\.?\s*0?1\W{0,80})?N\S*\s*:?\s*(\d{4,5})-(\d{7,9})",
         text,
@@ -1766,15 +2022,15 @@ def parse_loose_arca_cae_ocr(text):
     if len(receipt_number) > 8 and receipt_number.startswith("0"):
         receipt_number = receipt_number[-8:]
 
-    explicit_code = document_code
-    text_code = first_match(r"C[oóÓÃ³0]D\.?\s*0*(\d{1,3})", text, re.IGNORECASE)
-    if explicit_code is None and text_code and int(text_code) in {1, 6, 11}:
-        explicit_code = int(text_code)
+    explicit_code = document_code or extract_arca_document_code(text)
+    if explicit_code not in {1, 6, 11}:
+        explicit_code = None
     if explicit_code in {1, 6, 11}:
         document_code = explicit_code
         letter = "A" if explicit_code == 1 else "B" if explicit_code == 6 else "C"
 
-    cae = barcode.group(4) if barcode else first_match(r"CAE\S*:\s*(\d{13,14})", text, re.IGNORECASE)
+    cae = barcode.group(4) if barcode else None
+    cae = cae or extract_cae(text)
     if cae and len(cae) != 14:
         cae = None
 
@@ -1783,26 +2039,21 @@ def parse_loose_arca_cae_ocr(text):
         due_raw = barcode.group(5)
         due_date = f"{due_raw[:4]}-{due_raw[4:6]}-{due_raw[6:]}"
     else:
-        due_value = (
-            first_match(r"Fecha\s+venc\.\s*:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
-            or first_match(r"Fecha de Vto\. de CAE:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
-            or first_match(r"FECHA DE VENCIMIENTO:\s*(\d{1,2}[./]\d{1,2}[./]\d{4})", text, re.IGNORECASE)
-        )
-        due_date = parse_document_date(due_value) if due_value else None
+        due_date = extract_cae_expiration(text)
 
     issue_value = (
         first_match(r"FECHA DE EMISION:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
-        or first_match(r"Fecha de Emisi\S*n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+        or first_match(r"Fecha de Emisi.{0,4}n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
         or first_match(r"Fecha de emisi\S*n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
         or first_match(r"Fecha\s*:?\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
         or first_match(r"FACTURA.{0,220}?(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE | re.DOTALL)
     )
 
     cuit_matches = re.findall(r"(?:CUIT|C\.U\.I\.T|CUIL/CUIT)\s*:?\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
-    provider_cuit = cuit_matches[0] if cuit_matches else None
-    receiver_cuit = cuit_matches[1] if len(cuit_matches) > 1 else None
-    if provider_cuit is None:
-        provider_cuit = first_match(r"Archivo:.*?(\d{11})_\d{3}_", text, re.IGNORECASE)
+    filename_cuit = first_match(r"Archivo:.*?(\d{11})_\d{3}_", text, re.IGNORECASE)
+    provider_cuit = filename_cuit or (cuit_matches[0] if cuit_matches else None)
+    receiver_candidates = [value for value in cuit_matches if digits(value) != digits(provider_cuit)]
+    receiver_cuit = receiver_candidates[0] if receiver_candidates else (cuit_matches[1] if len(cuit_matches) > 1 else None)
 
     if "E-BUYPLACE" in upper_text:
         provider_name = "E-BUYPLACE S.A."
@@ -1828,10 +2079,10 @@ def parse_loose_arca_cae_ocr(text):
 
     subtotal = (
         parse_money(first_match(r"Neto Gravado\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
-        or parse_money(first_match(r"Importe Neto Gravado:\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+        or first_labeled_money(r"Importe Neto Gravado:\s*\$?", text)
         or parse_money(first_match(r"GRAVADO\s*:?\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
         or parse_money(first_match(r"Por Servicios.*?\s([\d.,]+)\.?\s*IVA", text, re.IGNORECASE | re.DOTALL))
-        or parse_money(first_match(r"Total valor Plan de Servicio\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+        or first_labeled_money(r"Total valor Plan de Servicio\s*\$?", text)
     )
     if subtotal is None:
         subtotal_values = [
@@ -1878,10 +2129,10 @@ def parse_loose_arca_cae_ocr(text):
 
     total = (
         (parse_money(summary_row.group(5)) if summary_row else None)
-        or parse_money(first_match(r"Importe Total:\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+        or first_labeled_money(r"Importe Total:\s*\$?", text)
         or parse_money(first_match(r"^[ \t]*TOTAL[ \t]*:?[ \t]*\$?[ \t]*([\d.,]+)", text, re.IGNORECASE | re.MULTILINE))
         or parse_money(first_match(r"(?<!SUB)\bTOTAL[ \t]*:?[ \t]*\$?[ \t]*([\d.,]+)", text, re.IGNORECASE))
-        or parse_money(first_match(r"Total\s*\$\s*([\d.,]+)", text, re.IGNORECASE))
+        or first_labeled_money(r"Total\s*\$?", text)
     )
     if (not iva_total) and subtotal is not None and total is not None and (not tributos_total):
         iva_total = round_money(total - subtotal)
@@ -1926,7 +2177,7 @@ def parse_loose_arca_cae_ocr(text):
         "fecha_vencimiento_cae": due_date,
         "iva": [],
         "tributos": [],
-        "items": [],
+        "items": extract_arca_items(text),
     }
     return normalize_invoice_json(parsed)
 
@@ -2996,6 +3247,7 @@ def normalize_external_document(parsed):
 
 
 def parse_supported_document_ocr(ocr_text):
+    ocr_text = deduplicate_document_copies(ocr_text)
     parsed = (
         parse_godaddy_english_receipt_ocr(ocr_text)
         or parse_godaddy_ocr_receipt_ocr(ocr_text)
@@ -3008,7 +3260,8 @@ def parse_supported_document_ocr(ocr_text):
         or parse_norwegian_travel_receipt_ocr(ocr_text)
         or parse_generic_external_invoice_ocr(ocr_text)
     )
-    return apply_arca_document_code_hint(parsed, ocr_text)
+    parsed = apply_arca_document_code_hint(parsed, ocr_text)
+    return enrich_arca_parser_result(parsed, ocr_text)
 
 
 def finalize_invoice_json(parsed, ocr_text=None):
@@ -3102,7 +3355,7 @@ def validate_invoice_json(parsed):
 
     errors = []
     missing = sorted(REQUIRED_KEYS - set(parsed))
-    extra = sorted(set(parsed) - REQUIRED_KEYS)
+    extra = sorted(set(parsed) - REQUIRED_KEYS - OPTIONAL_KEYS)
 
     if missing:
         errors.append(f"Faltan claves: {', '.join(missing)}")
@@ -3134,6 +3387,16 @@ def validate_invoice_json(parsed):
     numero_comprobante = parsed.get("numero_comprobante")
     if numero_comprobante is not None and not re.fullmatch(r"\d{8}", str(numero_comprobante)):
         errors.append("numero_comprobante deberia tener 8 digitos.")
+
+    complete_number = parsed.get("numero_factura_completo")
+    if complete_number is not None and not re.fullmatch(r"\d{11}_\d{3}_\d{5}_\d{8}", str(complete_number)):
+        errors.append("numero_factura_completo deberia tener formato CUIT_CODIGO_PV_NUMERO.")
+
+    iva_percentage = parsed.get("iva_porcentaje")
+    if iva_percentage is not None:
+        iva_values = iva_percentage if isinstance(iva_percentage, list) else [iva_percentage]
+        if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in iva_values):
+            errors.append("iva_porcentaje deberia ser numero, array numerico o null.")
 
     for date_key in ("fecha_emision", "fecha_vencimiento_cae"):
         value = parsed.get(date_key)

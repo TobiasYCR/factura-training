@@ -1,0 +1,87 @@
+--- PAGE 1 ---
+ORIGINAL
+C
+FACTURA
+JUSTO LEANDRO MANUEL
+CÓD. 011
+Punto de Venta: 00003 Comp. Nro: 00000081
+Razón Social: JUSTO LEANDRO MANUEL Fecha de Emisión: 12/05/2020
+Domicilio Comercial: Juncal 858 Piso:5 Dpto:B - Ciudad de CUIT: 20293935700
+Buenos Aires Ingresos Brutos: Exento
+Condición frente al IVA: Responsable Monotributo Fecha de Inicio de Actividades: 01/05/2015
+Período Facturado Desde: 12/05/2020 Hasta:12/05/2020 Fecha de Vto. para el pago:12/05/2020
+CUIT: 30715444530 Apellido y Nombre / Razón Social:CS TECH CONSULTING S.A.
+Condición frente al IVA: IVA Responsable Inscripto Domicilio:Maestra Rocha Montarce 1150 - El Palomar, Buenos Aires
+Condición de venta: Contado
+Código Producto / Servicio Cantidad U. Medida Precio Unit. (USD) % Bonif Imp. Bonif. (USD) Subtotal (USD)
+1 Honorarios Profesionales 1,00 otras 135,00 0,00 0,00 135,00
+unidades
+Moneda: USD - Dólar Estadounidense
+Subtotal:USD 135,00
+Importe Otros Tributos:USD 0,00
+Importe Total:USD 135,00
+El total de este comprobante expresado en moneda de curso legal - Pesos Argentinos - considerándose un tipo de cambio
+consignado de 67.370000 asciende a: $ 9094,95
+Pág. 1/1 CAE N°: 70190917201382
+Comprobante Autorizado
+Fecha de Vto. de CAE: 22/05/2020
+Esta Administración Federal no se responsabiliza por los datos ingresados en el detalle de la operación
+202939357000110000370190917201382202005226
+--- PAGE 2 ---
+DUPLICADO
+C
+FACTURA
+JUSTO LEANDRO MANUEL
+CÓD. 011
+Punto de Venta: 00003 Comp. Nro: 00000081
+Razón Social: JUSTO LEANDRO MANUEL Fecha de Emisión: 12/05/2020
+Domicilio Comercial: Juncal 858 Piso:5 Dpto:B - Ciudad de CUIT: 20293935700
+Buenos Aires Ingresos Brutos: Exento
+Condición frente al IVA: Responsable Monotributo Fecha de Inicio de Actividades: 01/05/2015
+Período Facturado Desde: 12/05/2020 Hasta:12/05/2020 Fecha de Vto. para el pago:12/05/2020
+CUIT: 30715444530 Apellido y Nombre / Razón Social:CS TECH CONSULTING S.A.
+Condición frente al IVA: IVA Responsable Inscripto Domicilio:Maestra Rocha Montarce 1150 - El Palomar, Buenos Aires
+Condición de venta: Contado
+Código Producto / Servicio Cantidad U. Medida Precio Unit. (USD) % Bonif Imp. Bonif. (USD) Subtotal (USD)
+1 Honorarios Profesionales 1,00 otras 135,00 0,00 0,00 135,00
+unidades
+Moneda: USD - Dólar Estadounidense
+Subtotal:USD 135,00
+Importe Otros Tributos:USD 0,00
+Importe Total:USD 135,00
+El total de este comprobante expresado en moneda de curso legal - Pesos Argentinos - considerándose un tipo de cambio
+consignado de 67.370000 asciende a: $ 9094,95
+Pág. 1/1 CAE N°: 70190917201382
+Comprobante Autorizado
+Fecha de Vto. de CAE: 22/05/2020
+Esta Administración Federal no se responsabiliza por los datos ingresados en el detalle de la operación
+202939357000110000370190917201382202005226
+--- PAGE 3 ---
+TRIPLICADO
+C
+FACTURA
+JUSTO LEANDRO MANUEL
+CÓD. 011
+Punto de Venta: 00003 Comp. Nro: 00000081
+Razón Social: JUSTO LEANDRO MANUEL Fecha de Emisión: 12/05/2020
+Domicilio Comercial: Juncal 858 Piso:5 Dpto:B - Ciudad de CUIT: 20293935700
+Buenos Aires Ingresos Brutos: Exento
+Condición frente al IVA: Responsable Monotributo Fecha de Inicio de Actividades: 01/05/2015
+Período Facturado Desde: 12/05/2020 Hasta:12/05/2020 Fecha de Vto. para el pago:12/05/2020
+CUIT: 30715444530 Apellido y Nombre / Razón Social:CS TECH CONSULTING S.A.
+Condición frente al IVA: IVA Responsable Inscripto Domicilio:Maestra Rocha Montarce 1150 - El Palomar, Buenos Aires
+Condición de venta: Contado
+Código Producto / Servicio Cantidad U. Medida Precio Unit. (USD) % Bonif Imp. Bonif. (USD) Subtotal (USD)
+1 Honorarios Profesionales 1,00 otras 135,00 0,00 0,00 135,00
+unidades
+Moneda: USD - Dólar Estadounidense
+Subtotal:USD 135,00
+Importe Otros Tributos:USD 0,00
+Importe Total:USD 135,00
+El total de este comprobante expresado en moneda de curso legal - Pesos Argentinos - considerándose un tipo de cambio
+consignado de 67.370000 asciende a: $ 9094,95
+Pág. 1/1 CAE N°: 70190917201382
+Comprobante Autorizado
+Fecha de Vto. de CAE: 22/05/2020
+Esta Administración Federal no se responsabiliza por los datos ingresados en el detalle de la operación
+202939357000110000370190917201382202005226
