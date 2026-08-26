@@ -483,6 +483,7 @@ def extract_cae(text):
 def extract_cae_expiration(text):
     label = re.compile(
         r"(?:FECHA\s+DE\s+VTO\.?\s+DE\s+CAE|FECHA\s+DE\s+VENCIMIENTO\s+DE\s+CAE|"
+        r"FECHA\s+DE\s+VENCIMIENTO|"
         r"VTO\.?\s+CAE|VENCIMIENTO\s+CAE)",
         re.IGNORECASE,
     )
@@ -620,6 +621,69 @@ def extract_arca_reference_items(text):
     return items
 
 
+def extract_arca_description_items(text):
+    """Extract rows from ARCA tables headed by Descripcion/Importe."""
+    lines = [re.sub(r"\s+", " ", line).strip() for line in str(text or "").splitlines()]
+    in_table = False
+    pending_description = None
+    items = []
+    seen = set()
+    stop_pattern = re.compile(
+        r"^(?:NETO\s+GRAVADO|IVA\b|I\.V\.A\b|PERCEPCI|IIBB\b|TOTAL\b|"
+        r"CAE\b|FECHA\s+DE\s+VTO|FECHA\s+DE\s+VENCIMIENTO|S\.E\.U\.O\.)",
+        re.IGNORECASE,
+    )
+    description_header = re.compile(r"^DESCRIPCI[ÓO0]N(?:\s+IMPORTE)?$", re.IGNORECASE)
+
+    def add_item(description, amount):
+        description = clean_arca_name(description)
+        if not description or amount is None or description.lower() in seen:
+            return
+        seen.add(description.lower())
+        items.append(
+            {
+                "descripcion": description,
+                "cantidad": 1,
+                "precio_unitario": amount,
+                "importe": amount,
+            }
+        )
+
+    for line in lines:
+        upper = line.upper()
+        if description_header.match(upper) or re.search(r"\bDESCRIPCI[ÓO0]N\s+IMPORTE\b", upper):
+            in_table = True
+            pending_description = None
+            continue
+
+        # Some OSDE OCR outputs omit the table header but retain this row.
+        direct_row = re.match(r"^(TOTAL\s+VALOR\s+PLAN\s+DE\s+SERVICIO)(?:\s+\$?\s*([\d.,]+))?$", line, re.IGNORECASE)
+        if direct_row and direct_row.group(2):
+            add_item(direct_row.group(1), parse_ar_money(direct_row.group(2)))
+            continue
+
+        if not in_table:
+            continue
+        if stop_pattern.match(upper):
+            break
+        if not line:
+            continue
+
+        amount_match = re.search(r"(?:\$\s*)?(-?[\d.,]+)\s*$", line)
+        if amount_match:
+            description = line[: amount_match.start()].strip(" :;-|")
+            if pending_description:
+                description = pending_description
+                pending_description = None
+            add_item(description, parse_ar_money(amount_match.group(1)))
+            continue
+
+        if not re.search(r"^(?:IMPORTE|CANTIDAD|PRECIO|UNIDAD|CODIGO)\b", upper):
+            pending_description = line
+
+    return items
+
+
 def extract_arca_concept_items(text):
     """Extract non-subtotal rows from telecom Conceptos tables."""
     section_match = re.search(
@@ -748,7 +812,11 @@ def build_display_description(parsed, source_text=None):
     if descriptions:
         return _join_display_values(list(dict.fromkeys(descriptions)))
 
-    fallback_items = extract_arca_reference_items(source_text) or extract_arca_concept_items(source_text)
+    fallback_items = (
+        extract_arca_description_items(source_text)
+        or extract_arca_reference_items(source_text)
+        or extract_arca_concept_items(source_text)
+    )
     return _join_display_values([item["descripcion"] for item in fallback_items])
 
 
@@ -793,6 +861,7 @@ def enrich_arca_parser_result(parsed, text):
     if not normalized.get("items"):
         normalized["items"] = (
             extract_arca_items(normalized_text)
+            or extract_arca_description_items(normalized_text)
             or extract_arca_reference_items(normalized_text)
             or extract_arca_concept_items(normalized_text)
         )
@@ -814,6 +883,18 @@ def first_money(patterns, text, flags=re.IGNORECASE):
 def clean_external_line(line):
     line = re.sub(r"\s+", " ", str(line)).strip(" ,;")
     return line or None
+
+
+def append_external_item_continuation(item, line):
+    """Keep wrapped product lines in the same normalized description."""
+    line = clean_external_line(line)
+    if not item or not line:
+        return
+    if "@" in line:
+        item["reference"] = line
+        return
+    description = clean_external_line(item.get("description"))
+    item["description"] = clean_external_line(f"{description} {line}")
 
 
 def extract_external_buyer_details(text):
@@ -1008,6 +1089,10 @@ def godaddy_support_phone(text, spanish_receipt=False):
 def parse_godaddy_english_receipt_ocr(ocr_text):
     text = "\n".join(line.strip() for line in ocr_text.splitlines() if line.strip())
     upper_text = text.upper()
+    if re.search(r"\bRECIBO\b", text, re.IGNORECASE) and re.search(
+        r"(?:PLAZO|DURACI\S+N)\s+PRODUCTO", text, re.IGNORECASE
+    ):
+        return None
     filename_number = first_match(r"Archivo:.*?GoDaddy\s+(\d+)\.pdf", text, re.IGNORECASE)
     if not filename_number and (
         "RECEIPT" not in upper_text or not re.search(r"CUSTOMER\s*#|BILL TO|BALANCE DUE", text, re.IGNORECASE)
@@ -1069,6 +1154,8 @@ def parse_godaddy_english_receipt_ocr(ocr_text):
     for line in [line.strip() for line in item_section.splitlines() if line.strip()]:
         item = re.match(r"(?P<term>\d+\s+\S+)\s+(?P<description>.+?)\s+\$?\s*(?P<amount>[\d.,\s]+)$", line, re.IGNORECASE)
         if not item:
+            if items:
+                append_external_item_continuation(items[-1], line)
             continue
         amount = parse_money(item.group("amount"))
         items.append(
@@ -1201,8 +1288,8 @@ def parse_godaddy_receipt_ocr(ocr_text):
                 "reference": None,
             }
             items.append(current_item)
-        elif current_item and "@" in line:
-            current_item["reference"] = line
+        elif current_item:
+            append_external_item_continuation(current_item, line)
 
     return normalize_external_document(
         enrich_godaddy_receipt(
@@ -1311,8 +1398,8 @@ def parse_godaddy_ocr_receipt_ocr(ocr_text):
                 "reference": None,
             }
             items.append(current_item)
-        elif current_item and "@" in line:
-            current_item["reference"] = line
+        elif current_item:
+            append_external_item_continuation(current_item, line)
 
     provider_address = first_match(r"GoDaddy\.com, LLC.*?\n(.*?United States)", text, re.DOTALL)
     provider_lines = clean_godaddy_provider_lines(provider_address)
@@ -2340,7 +2427,12 @@ def parse_loose_arca_cae_ocr(text):
         "fecha_vencimiento_cae": due_date,
         "iva": [],
         "tributos": [],
-        "items": extract_arca_items(text),
+        "items": (
+            extract_arca_items(text)
+            or extract_arca_description_items(text)
+            or extract_arca_reference_items(text)
+            or extract_arca_concept_items(text)
+        ),
     }
     return normalize_invoice_json(parsed)
 
@@ -2746,7 +2838,11 @@ def parse_loose_arca_service_ocr(text):
         "fecha_vencimiento_cae": due_date,
         "iva": iva,
         "tributos": [],
-        "items": extract_arca_items(text) or extract_arca_concept_items(text),
+        "items": (
+            extract_arca_items(text)
+            or extract_arca_description_items(text)
+            or extract_arca_concept_items(text)
+        ),
     }
     return normalize_invoice_json(parsed)
 

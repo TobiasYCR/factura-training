@@ -104,6 +104,29 @@ FECHA DE VENCIMIENTO: 28.01.2021
         self.assertEqual(parsed["items"][0]["descripcion"], "Interés pago fuera de término")
         self.assertEqual(parsed["descripcion"], "Interés pago fuera de término")
 
+    def test_osde_invoice_description_and_cae_due_date(self):
+        text = """Archivo: 04 Abril - Osde 0082-00118966.pdf
+OSDE
+Factura: 0082-00118966
+Fecha de emisión: 26/04/2021
+CUIT: 30-54674125-3
+CS TECH CONSULTING SA
+CUIL/CUIT: 30-71544453-0
+Descripción Importe
+Total valor Plan de Servicio $ 40.866,07
+Neto Gravado $ 40.866,07
+IVA Inscripto 10,50% $ 4.290,94
+Percepción $ 3.064,95
+Total $ 48.221,96
+CAE: 71173264375701
+FECHA DE VENCIMIENTO: 06.05.2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["items"][0]["descripcion"], "Total valor Plan de Servicio")
+        self.assertEqual(parsed["descripcion"], "Total valor Plan de Servicio")
+        self.assertEqual(parsed["fecha_vencimiento_cae"], "2021-05-06")
+
     def test_telecom_concepts_are_summarized(self):
         text = """Archivo: 04 Abril - CV 6723-01768328.pdf
 Cablevisión Fibertel
@@ -126,9 +149,12 @@ TOTAL 4682,45
 CAE Nro: 71168883477372
 """
         concept_items = extract_arca_concept_items(text)
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
         description = build_display_description({"items": [], "tipo_comprobante": "Factura A"}, text)
 
         self.assertGreaterEqual(len(concept_items), 5)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["descripcion"], description)
         self.assertEqual(
             description,
             "Servicios de televisión, packs premium, internet 100 megas y descuentos correspondientes al período 05-2021.",
@@ -144,6 +170,27 @@ CAE Nro: 71168883477372
             build_display_description(parsed),
             "Linux Hosting con cPanel Inicial - Renovación",
         )
+
+    def test_godaddy_keeps_wrapped_product_line(self):
+        text = """Archivo: 01 Enero - GoDaddy 1805647812.pdf
+Recibo
+N° 1805647812
+FECHA:
+1/1/2021
+NÚMERO DE CLIENTE: 203521924
+FACTURAR A:
+CS TECH CONSULTING
+PAGO:
+Plazo Producto Cantidad
+1 mes Linux Hosting con cPanel Inicial - Renovación $ 1.199,99
+deeptics.com.ar
+Total (ARS) $ 1.199,99
+Saldo adeudado (ARS) $ 0,00
+"""
+        parsed = parse_supported_document_ocr(text)
+
+        self.assertIn("deeptics.com.ar", parsed["items"][0]["description"])
+        self.assertIn("deeptics.com.ar", build_display_description(parsed))
 
 
 if __name__ == "__main__":
