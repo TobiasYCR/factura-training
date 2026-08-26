@@ -726,6 +726,59 @@ def extract_arca_display_descriptions(text):
     return descriptions
 
 
+def extract_arca_detail_block_descriptions(text):
+    """Extract ARCA item descriptions from the detail block even if table headers OCR poorly."""
+    lines = [re.sub(r"\s+", " ", line).strip() for line in str(text or "").splitlines()]
+    descriptions = []
+    seen = set()
+    in_detail_block = False
+
+    def add_candidate(value):
+        value = clean_arca_description_candidate(value)
+        if not value:
+            return
+        key = value.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        descriptions.append(value)
+
+    for line in lines:
+        upper = line.upper()
+        if re.search(r"CONDICI[ÓO�]N\s+DE\s+VENTA|CONDICI[ÓO�]N\s+VENTA", upper):
+            in_detail_block = True
+            continue
+        if not in_detail_block:
+            continue
+        if re.search(
+            r"^(?:SUBTOTAL|NETO\s+GRAVADO|IMPORTE\s+OTROS|IMPORTE\s+TOTAL|IVA\b|I\.?V\.?A\.?|"
+            r"PERCEPCI|IIBB\b|TOTAL\b|CAE\b|FECHA\s+DE\s+VTO|FECHA\s+DE\s+VENCIMIENTO|"
+            r"P[ÁA�]G\.?|COMPROBANTE\s+AUTORIZADO)",
+            upper,
+        ):
+            break
+        if re.search(
+            r"^(?:C[ÓO�]?DIGO|PRODUCTO|SERVICIO|CANTIDAD|U\.?\s*MEDIDA|PRECIO|BONIF|"
+            r"PER[IÍ�]ODO\s+FACTURADO|CUIT\b|APELLIDO|RAZ[ÓO�]N\s+SOCIAL|DOMICILIO)",
+            upper,
+        ):
+            continue
+        if not re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", line):
+            continue
+
+        candidate = re.sub(r"^\d{1,4}\s+", "", line)
+        candidate = re.sub(
+            r"\s+\d+(?:[,.]\d+)?\s+(?:unidades?|unidad|servicios?|mes|kg|hs?|horas?)\b.*$",
+            "",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+        candidate = re.sub(r"\s+\$?\s*-?[\d.,]+(?:\s+\$?\s*-?[\d.,]+)*\s*$", "", candidate)
+        add_candidate(candidate)
+
+    return descriptions
+
+
 def extract_arca_reference_items(text):
     """Extract ARCA rows whose useful description is under Referencia."""
     items = []
@@ -949,7 +1002,11 @@ def build_display_description(parsed, source_text=None):
         or extract_arca_concept_items(source_text)
     )
     fallback_descriptions = [item["descripcion"] for item in fallback_items]
-    return _join_display_values(fallback_descriptions or extract_arca_display_descriptions(source_text))
+    return _join_display_values(
+        fallback_descriptions
+        or extract_arca_display_descriptions(source_text)
+        or extract_arca_detail_block_descriptions(source_text)
+    )
 
 
 def first_labeled_money(label_pattern, text, flags=re.IGNORECASE, radius=100):
