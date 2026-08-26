@@ -47,6 +47,7 @@
       "type": ["string", "null"],
       "pattern": "^\\d{11}_\\d{3}_\\d{5}_\\d{8}$"
     },
+    "descripcion": { "type": ["string", "null"] },
     "fecha_emision": {
       "type": ["string", "null"],
       "format": "date"

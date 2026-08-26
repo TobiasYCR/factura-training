@@ -48,7 +48,7 @@ REQUIRED_KEYS = {
     "tributos",
     "items",
 }
-OPTIONAL_KEYS = {"numero_factura_completo", "iva_porcentaje"}
+OPTIONAL_KEYS = {"numero_factura_completo", "iva_porcentaje", "descripcion"}
 PERSON_KEYS = {"nombre", "doc_tipo", "doc_nro", "cuit", "condicion_iva"}
 IVA_CODE_BY_RATE = {10.5: 4, 21.0: 5, 27.0: 6}
 EXTERNAL_DOCUMENT_KEYS = (
@@ -67,6 +67,7 @@ EXTERNAL_DOCUMENT_KEYS = (
     "items",
     "notes",
 )
+EXTERNAL_OPTIONAL_KEYS = {"descripcion"}
 EXTERNAL_PARTY_KEYS = ("name", "business_name", "tax_id", "vat_number", "address", "country", "phone")
 EXTERNAL_DOCUMENT_INFO_KEYS = ("title", "number", "date", "account_number", "customer_number", "status")
 EXTERNAL_PAYMENT_KEYS = ("method", "card_brand", "card_last4", "amount")
@@ -593,6 +594,164 @@ def extract_arca_items(text):
     return items
 
 
+def extract_arca_reference_items(text):
+    """Extract ARCA rows whose useful description is under Referencia."""
+    items = []
+    for line in [re.sub(r"\s+", " ", line).strip() for line in str(text or "").splitlines()]:
+        match = re.match(
+            r"^(?P<period>\d{1,2}/\d{4})\s+(?P<description>.+?)\s+"
+            r"(?P<document>\d{8,})\s+\$?\s*(?P<amount>-?[\d.,]+)$",
+            line,
+        )
+        if not match:
+            continue
+        description = clean_arca_name(match.group("description"))
+        amount = parse_ar_money(match.group("amount"))
+        if not description or amount is None:
+            continue
+        items.append(
+            {
+                "descripcion": description,
+                "cantidad": 1,
+                "precio_unitario": amount,
+                "importe": amount,
+            }
+        )
+    return items
+
+
+def extract_arca_concept_items(text):
+    """Extract non-subtotal rows from telecom Conceptos tables."""
+    section_match = re.search(
+        r"(?:^|\n)\s*CONCEPTOS(?:\s+IMPORTE)?\s*(.*?)(?=\n\s*(?:NETO\s+GRAVADO|I\.?V\.?A\.?|TOTAL\b))",
+        str(text or ""),
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not section_match:
+        return []
+
+    items = []
+    seen = set()
+    for raw_line in section_match.group(1).splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or re.search(r"\bSUBTOTAL\b", line, re.IGNORECASE):
+            continue
+        amount_match = re.search(r"(?P<amount>-?[\d.,]+)\s*$", line)
+        if not amount_match:
+            continue
+        description = line[: amount_match.start()].strip(" :;-|")
+        description = re.sub(r"\b\d{1,2}-\d{4}\b", "", description)
+        description = re.sub(r"\b\d{1,2}/\d{4}\b", "", description)
+        description = clean_external_line(description)
+        amount = parse_ar_money(amount_match.group("amount"))
+        if not description or amount is None or description.lower() in seen:
+            continue
+        seen.add(description.lower())
+        items.append(
+            {
+                "descripcion": description,
+                "cantidad": 1,
+                "precio_unitario": amount,
+                "importe": amount,
+            }
+        )
+    return items
+
+
+def _join_display_values(values):
+    values = [value for value in values if value]
+    if not values:
+        return None
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]} y {values[1]}"
+    return "; ".join(values[:-1]) + f" y {values[-1]}"
+
+
+def build_telecom_display_description(text, concept_items=None):
+    """Summarize a multi-line Cablevision/Fibertel concepts table."""
+    source = str(text or "")
+    upper = source.upper()
+    if not any(marker in upper for marker in ("CABLEVISI", "FIBERTEL", "TELECOM ARGENTINA")):
+        return None
+
+    descriptions = [
+        item.get("descripcion")
+        for item in (concept_items or extract_arca_concept_items(source))
+        if isinstance(item, dict)
+    ]
+    folded = " ".join(descriptions).lower()
+    parts = []
+    if re.search(r"cablevisi|televisi", folded):
+        parts.append("televisión")
+    if "pack" in folded or "futbol" in folded or "fútbol" in folded:
+        parts.append("packs premium")
+    if "fibertel" in folded or "internet" in folded:
+        speed = re.search(r"\b(\d+)\s*megas?\b", folded)
+        parts.append(f"internet {speed.group(1)} megas" if speed else "internet")
+    if any(marker in folded for marker in ("promo", "promocion", "promoción", "descuento")):
+        parts.append("descuentos")
+    if not parts:
+        return None
+
+    period_match = re.search(
+        r"CONCEPTOS.*?\b(\d{2}-\d{4})\b", source, re.IGNORECASE | re.DOTALL
+    )
+    period = period_match.group(1) if period_match else None
+    if len(parts) == 1:
+        joined_parts = parts[0]
+    elif len(parts) == 2:
+        joined_parts = f"{parts[0]} y {parts[1]}"
+    else:
+        joined_parts = ", ".join(parts[:-1]) + f" y {parts[-1]}"
+    description = f"Servicios de {joined_parts}"
+    if period:
+        description += f" correspondientes al período {period}."
+    else:
+        description += "."
+    return description
+
+
+def build_display_description(parsed, source_text=None):
+    """Build the single description consumed by the administrative screen."""
+    if not isinstance(parsed, dict):
+        return None
+
+    source_text = str(source_text or "")
+    if parsed.get("document_type"):
+        items = parsed.get("items") or []
+        descriptions = [
+            clean_external_line(item.get("description"))
+            for item in items
+            if isinstance(item, dict) and item.get("description")
+        ]
+        if descriptions:
+            return _join_display_values(list(dict.fromkeys(descriptions)))
+        references = [
+            clean_external_line(item.get("reference"))
+            for item in items
+            if isinstance(item, dict) and item.get("reference")
+        ]
+        return _join_display_values(list(dict.fromkeys(references)))
+
+    telecom_description = build_telecom_display_description(source_text, parsed.get("items"))
+    if telecom_description:
+        return telecom_description
+
+    items = parsed.get("items") or []
+    descriptions = [
+        clean_arca_name(item.get("descripcion"))
+        for item in items
+        if isinstance(item, dict) and item.get("descripcion")
+    ]
+    if descriptions:
+        return _join_display_values(list(dict.fromkeys(descriptions)))
+
+    fallback_items = extract_arca_reference_items(source_text) or extract_arca_concept_items(source_text)
+    return _join_display_values([item["descripcion"] for item in fallback_items])
+
+
 def first_labeled_money(label_pattern, text, flags=re.IGNORECASE, radius=100):
     source = str(text or "")
     label = re.search(label_pattern, source, flags)
@@ -632,7 +791,11 @@ def enrich_arca_parser_result(parsed, text):
         normalized["emisor"] = emitter
 
     if not normalized.get("items"):
-        normalized["items"] = extract_arca_items(normalized_text)
+        normalized["items"] = (
+            extract_arca_items(normalized_text)
+            or extract_arca_reference_items(normalized_text)
+            or extract_arca_concept_items(normalized_text)
+        )
 
     return normalize_invoice_json(normalized)
 
@@ -2264,7 +2427,7 @@ def parse_osde_debit_note_ocr(text):
         "fecha_vencimiento_cae": due_date,
         "iva": iva,
         "tributos": tributos,
-        "items": [],
+        "items": extract_arca_reference_items(text),
     }
     return normalize_invoice_json(parsed)
 
@@ -2583,7 +2746,7 @@ def parse_loose_arca_service_ocr(text):
         "fecha_vencimiento_cae": due_date,
         "iva": iva,
         "tributos": [],
-        "items": [],
+        "items": extract_arca_items(text) or extract_arca_concept_items(text),
     }
     return normalize_invoice_json(parsed)
 
@@ -3284,7 +3447,7 @@ def validate_external_document_json(parsed):
 
     errors = []
     missing = sorted(set(EXTERNAL_DOCUMENT_KEYS) - set(parsed))
-    extra = sorted(set(parsed) - set(EXTERNAL_DOCUMENT_KEYS))
+    extra = sorted(set(parsed) - set(EXTERNAL_DOCUMENT_KEYS) - EXTERNAL_OPTIONAL_KEYS)
     if missing:
         errors.append(f"Faltan claves externas: {', '.join(missing)}")
     if extra:

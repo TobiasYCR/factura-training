@@ -49,6 +49,7 @@ PDF ARCA
 | `numero_comprobante` | string/null | Numero normalizado a 8 digitos. |
 | `numero_factura` | string/null | Formato `00000-00000000`. |
 | `numero_factura_completo` | string/null | Identificador para integraciones: `CUIT(11)_CODIGO(3)_PUNTO_VENTA(5)_NUMERO(8)`. |
+| `descripcion` | string/null | Descripcion unica para la pantalla administrativa, tomada del producto/servicio o de la referencia cuando corresponde. |
 | `fecha_emision` | string/null | Fecha ISO `YYYY-MM-DD`. |
 | `emisor` | object | Datos del emisor. |
 | `receptor` | object | Datos del receptor. |

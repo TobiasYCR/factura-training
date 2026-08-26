@@ -43,7 +43,8 @@
       "type": "array",
       "items": { "$ref": "#/$defs/item" }
     },
-    "notes": { "type": ["string", "null"] }
+    "notes": { "type": ["string", "null"] },
+    "descripcion": { "type": ["string", "null"] }
   },
   "$defs": {
     "party": {

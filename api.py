@@ -14,6 +14,7 @@ from infer import (
     BASE_MODEL,
     LORA_MODEL,
     build_arca_invoice_identifier,
+    build_display_description,
     derive_iva_percentage,
     extract_json,
     finalize_invoice_json,
@@ -95,18 +96,23 @@ def document_completeness(data):
     return scalar_present / scalar_total
 
 
-def add_arca_integration_fields(data):
-    """Expose presentation fields without changing the validated ARCA contract."""
-    if not isinstance(data, dict) or data.get("document_type"):
+def add_arca_integration_fields(data, source_text=None):
+    """Expose fields consumed by the administrative invoice screen."""
+    if not isinstance(data, dict):
         return data
 
     enriched = dict(data)
-    invoice_identifier = build_arca_invoice_identifier(data)
-    iva_percentage = derive_iva_percentage(data)
-    if invoice_identifier:
-        enriched["numero_factura_completo"] = invoice_identifier
-    if iva_percentage is not None:
-        enriched["iva_porcentaje"] = iva_percentage
+    if not data.get("document_type"):
+        invoice_identifier = build_arca_invoice_identifier(data)
+        iva_percentage = derive_iva_percentage(data)
+        if invoice_identifier:
+            enriched["numero_factura_completo"] = invoice_identifier
+        if iva_percentage is not None:
+            enriched["iva_porcentaje"] = iva_percentage
+
+    description = build_display_description(data, source_text)
+    if description:
+        enriched["descripcion"] = description
     return enriched
 
 
@@ -300,7 +306,7 @@ def extract_document(
         "confidence": calculate_confidence(parsed, errors, extraction_source, used_model),
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
         "errors": errors,
-        "data": add_arca_integration_fields(parsed),
+        "data": add_arca_integration_fields(parsed, parser_text),
         "raw_model_response": raw_model_response,
     }
 
@@ -352,7 +358,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                 model_policy=request["model_policy"],
                 min_confidence=request["min_confidence"],
             )
-            result["data"] = add_arca_integration_fields(result["data"])
+            result["data"] = add_arca_integration_fields(result["data"], request["ocr_text"])
             result["input"] = {
                 "filename": request["filename"],
                 "text_extractor": request["text_extractor"],

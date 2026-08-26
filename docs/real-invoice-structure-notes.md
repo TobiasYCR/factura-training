@@ -46,6 +46,11 @@ Estructura comun:
 - CAE;
 - vencimiento CAE.
 
+La API tambien expone `descripcion` como campo de integracion para la pantalla
+administrativa. En facturas con una tabla `Producto / Servicio` se toma la
+descripcion del item. En documentos como OSDE, donde el concepto aparece bajo
+`Referencia`, se usa ese valor.
+
 Salida:
 
 ```text
@@ -104,6 +109,7 @@ Tratamiento actual:
 - No forzar GoDaddy al schema ARCA.
 - Mantener schema externo.
 - Extraer total, pago, saldo, cliente, numero y productos.
+- Exponer `descripcion` usando el valor de `Producto`; si no existe, usar `Referencia`.
 
 ## 6. Teamwork / Wise
 
@@ -181,6 +187,10 @@ Tratamiento actual:
 - Si tiene CAE y datos ARCA, usar schema ARCA.
 - Si es recibo o detalle sin CAE, usar schema externo o marcar como desconocido.
 - No inventar CAE ni punto de venta cuando no aparece.
+
+En facturas de Cablevision/Fibertel, cuando `Conceptos` contiene varias lineas,
+la API conserva los items y genera una descripcion resumida que agrupa
+television, packs, internet y descuentos, incluyendo el periodo si aparece.
 
 ## 9. FlyBondi / Aerolineas
 

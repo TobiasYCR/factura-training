@@ -1,7 +1,12 @@
 import unittest
 
 from api import add_arca_integration_fields
-from infer import parse_supported_document_ocr, validate_extracted_document_json
+from infer import (
+    build_display_description,
+    extract_arca_concept_items,
+    parse_supported_document_ocr,
+    validate_extracted_document_json,
+)
 
 
 def arca_text(letter, code, cuit, point_of_sale, receipt_number, cae, due_date, item, total, iva_line=""):
@@ -68,6 +73,77 @@ class ArcaParserRegressionTests(unittest.TestCase):
         self.assertEqual(len(parsed["items"]), 1)
         self.assertEqual(parsed["cae"], "72500527231207")
         self.assertEqual(parsed["total"], 200000.0)
+
+    def test_arca_product_service_becomes_display_description(self):
+        text = arca_text(
+            "C", 11, "27229910871", "00001", "00000005", "71011847336594", "14/01/2021",
+            "Servicio de Consultoria SAP", 6750.0,
+        )
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["descripcion"], "Servicio de Consultoria SAP")
+
+    def test_osde_reference_becomes_display_description(self):
+        text = """Archivo: 01 Enero - Osde 0070-00125470.pdf
+OSDE
+Nota de debito: 0070-00125470
+Codigo: 02
+Fecha de emision: 18/01/2021
+CUIT: 30-54674125-3
+CUIL/CUIT: 30-71544453-0
+Período Referencia Nro. documento Importe
+02/2020 Interés pago fuera de término 244920129328 $ 16.142,52
+Neto Gravado $ 16.142,52
+IVA Inscripto 10,50% $ 1.694,96
+Total $ 19.048,17
+CAE: 71033484715213
+FECHA DE VENCIMIENTO: 28.01.2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["items"][0]["descripcion"], "Interés pago fuera de término")
+        self.assertEqual(parsed["descripcion"], "Interés pago fuera de término")
+
+    def test_telecom_concepts_are_summarized(self):
+        text = """Archivo: 04 Abril - CV 6723-01768328.pdf
+Cablevisión Fibertel
+FACTURA N°: 6723-01768328
+FECHA: 18-04-2021
+C.U.I.T.: 30639453738
+CONCEPTOS IMPORTE
+Cablevision Flow Box 05-2021 2385,12
+Adicional Cablevision Flow Box 05-2021 235,54
+Servicios de Television Subtotal 2620,66
+Pack Futbol 05-2021 686,78
+Packs Premium Subtotal 686,78
+Fibertel 100 Megas Wifi 05-2021 3244,63
+Servicios Banda Ancha (SBA) Subtotal 3244,63
+Promo Debito Automatico 6M -247,93
+Otros Subtotal -247,93
+Neto Gravado 3658,15
+I.V.A. 21% 768,22
+TOTAL 4682,45
+CAE Nro: 71168883477372
+"""
+        concept_items = extract_arca_concept_items(text)
+        description = build_display_description({"items": [], "tipo_comprobante": "Factura A"}, text)
+
+        self.assertGreaterEqual(len(concept_items), 5)
+        self.assertEqual(
+            description,
+            "Servicios de televisión, packs premium, internet 100 megas y descuentos correspondientes al período 05-2021.",
+        )
+
+    def test_external_product_precedes_reference(self):
+        parsed = {
+            "document_type": "external_provider_receipt",
+            "items": [{"description": "Linux Hosting con cPanel Inicial - Renovación", "reference": "deeptics.com.ar"}],
+        }
+
+        self.assertEqual(
+            build_display_description(parsed),
+            "Linux Hosting con cPanel Inicial - Renovación",
+        )
 
 
 if __name__ == "__main__":
