@@ -284,6 +284,31 @@ Fecha de Vto. de CAE: 23/04/2021
 
         self.assertEqual(parsed["descripcion"], "Honorarios Profesionales")
 
+    def test_arca_description_removes_noise_before_consultoria_abap(self):
+        text = """Archivo: sample 20307186722_011_00002_00000071.pdf
+ORIGINAL
+BARRIO GUSTAVO ARIEL
+C
+FACTURA
+COD. 011
+Punto de Venta: 00002 Comp. Nro: 00000071
+Fecha de Emisión: 12/04/2021
+CUIT: 20307186722
+Razón Social: BARRIO GUSTAVO ARIEL
+Condición frente al IVA: Responsable Monotributo
+CUIT: 30715444530 Apellido y Nombre / Razón Social: CS TECH CONSULTING S.A.
+Condición frente al IVA: IVA Responsable Inscripto
+Condición de venta: Otra
+eago Ipresos co Ju coins te o stn y Consultoria Abap Marzo
+Subtotal: $ 51150,00
+Importe Total: $ 51150,00
+CAE N°: 71152560834540
+Fecha de Vto. de CAE: 22/04/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["descripcion"], "Consultoria Abap Marzo")
+
     def test_osde_reference_becomes_display_description(self):
         text = """Archivo: 01 Enero - Osde 0070-00125470.pdf
 OSDE

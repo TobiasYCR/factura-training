@@ -652,6 +652,22 @@ def clean_arca_description_candidate(value):
     value = clean_arca_name(value)
     if not value:
         return None
+    strong_match = re.search(
+        r"\b("
+        r"consultor(?:ia|ía)\b.*|"
+        r"servicios?\s+profesionales\b.*|"
+        r"honorarios?\s+profesionales\b.*|"
+        r"mantenimiento\b.*"
+        r")$",
+        value,
+        re.IGNORECASE,
+    )
+    strong_prefix = value[: strong_match.start()] if strong_match else ""
+    if strong_match and (
+        strong_match.start() == 0
+        or re.search(r"[\[\]|]|\b(?:eago|ipresos|presos|coins|stn|stan|cani|meo|juan|posen|serten)\b", strong_prefix, re.IGNORECASE)
+    ):
+        value = strong_match.group(1).strip(" :;-|[]")
     service_match = re.search(
         r"\b("
         r"consultor(?:ia|ía)|servicios?|honorarios?|abono|mantenimiento|desarrollo|"
