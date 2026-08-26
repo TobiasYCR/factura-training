@@ -50,6 +50,31 @@ class ArcaParserRegressionTests(unittest.TestCase):
         self.assertEqual(parsed["numero_factura_completo"], "27959140850_011_00001_00000003")
         self.assertEqual(validate_extracted_document_json(parsed), [])
 
+    def test_visual_factura_c_letter_overrides_default_a(self):
+        text = """Archivo: sample.pdf
+ORIGINAL
+GIANNI FLORENCIA SOLEDAD
+C
+FACTURA
+COD. 011
+Punto de Venta: 00002 Comp. Nro: 00000014
+Razón Social: GIANNI FLORENCIA SOLEDAD Fecha de Emisión: 07/01/2021
+CUIT: 27351860303
+Condición frente al IVA: Responsable Monotributo
+CUIT: 30715444530 Apellido y Nombre / Razón Social: CS TECH CONSULTING S.A.
+Código Producto / Servicio Cantidad U. Medida Precio Unit. % Bonif Imp. Bonif. Subtotal
+1 Servicio de consultoria 30,00 unidades 700,00 0,00 0,00 21000,00
+Subtotal: $ 21000,00
+Importe Total: $ 21000,00
+CAE N°: 71023172497119
+Fecha de Vto. de CAE: 17/01/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["tipo_comprobante"], "Factura C")
+        self.assertEqual(parsed["codigo_comprobante"], 11)
+        self.assertEqual(parsed["numero_factura_completo"], "27351860303_011_00002_00000014")
+
     def test_factura_a_derives_iva_percentage(self):
         text = arca_text(
             "A", 1, "30707186722", "00002", "00000071", "71152560834540", "22/04/2021", "Servicio tecnico", 436621.12,
@@ -106,6 +131,31 @@ Fecha de Vto. de CAE: 14/01/2021
 
         self.assertEqual(parsed["items"][0]["descripcion"], "Servicio de Consultoria SAP")
         self.assertEqual(parsed["descripcion"], "Servicio de Consultoria SAP")
+
+    def test_arca_description_does_not_require_complete_item_amounts(self):
+        text = """Archivo: sample 20307186722_011_00002_00000071.pdf
+ORIGINAL
+BARRIO GUSTAVO ARIEL
+C
+FACTURA
+COD. 011
+Punto de Venta: 00002 Comp. Nro: 00000071
+Fecha de Emisión: 12/04/2021
+CUIT: 20307186722
+Razón Social: BARRIO GUSTAVO ARIEL
+Condición frente al IVA: Responsable Monotributo
+CUIT: 30715444530 Apellido y Nombre / Razón Social: CS TECH CONSULTING S.A.
+Código Producto / Servicio
+Consultoria Abap Marzo
+Subtotal: $ 51150,00
+Importe Total: $ 51150,00
+CAE N°: 71152560834540
+Fecha de Vto. de CAE: 22/04/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["tipo_comprobante"], "Factura C")
+        self.assertEqual(parsed["descripcion"], "Consultoria Abap Marzo")
 
     def test_osde_reference_becomes_display_description(self):
         text = """Archivo: 01 Enero - Osde 0070-00125470.pdf

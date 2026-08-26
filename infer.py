@@ -51,6 +51,8 @@ REQUIRED_KEYS = {
 OPTIONAL_KEYS = {"numero_factura_completo", "iva_porcentaje", "descripcion"}
 PERSON_KEYS = {"nombre", "doc_tipo", "doc_nro", "cuit", "condicion_iva"}
 IVA_CODE_BY_RATE = {10.5: 4, 21.0: 5, 27.0: 6}
+ARCA_CODE_BY_LETTER = {"A": 1, "B": 6, "C": 11}
+ARCA_LETTER_BY_CODE = {value: key for key, value in ARCA_CODE_BY_LETTER.items()}
 EXTERNAL_DOCUMENT_KEYS = (
     "document_type",
     "provider",
@@ -401,6 +403,24 @@ def normalize_invoice_code(value=None, letter=None):
     }.get(str(letter or "").strip().upper())
 
 
+def extract_arca_document_letter(text):
+    source = str(text or "")
+    head = source[:1400]
+    patterns = (
+        r"\b(?:FACTURA|RECIBO)\s+([ABC])\b",
+        r"\b([ABC])\s+(?:FACTURA|RECIBO)\b",
+        r"(?:^|\n)\s*([ABC])\s*(?:\n|[^\n]{0,35})\s*(?:FACTURA|RECIBO)\b",
+        r"\b([ABC])\s+C(?:[ÓO�]?D|OD|ÓDIGO|ODIGO)\.?(?:\s*N[°ºo.]*)?\s*:?\s*0*(?:1|6|11)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, head, re.IGNORECASE)
+        if match:
+            letter = match.group(1).upper()
+            if letter in ARCA_CODE_BY_LETTER:
+                return letter
+    return None
+
+
 def build_arca_invoice_identifier(parsed):
     if not isinstance(parsed, dict) or parsed.get("document_type"):
         return None
@@ -452,6 +472,10 @@ def extract_arca_document_code(text):
     )
     if code_text:
         return int(code_text)
+
+    letter = extract_arca_document_letter(text)
+    if letter:
+        return ARCA_CODE_BY_LETTER[letter]
     return None
 
 
@@ -622,6 +646,84 @@ def extract_arca_items(text):
             }
         )
     return items
+
+
+def clean_arca_description_candidate(value):
+    value = clean_arca_name(value)
+    if not value:
+        return None
+    upper = value.upper()
+    if upper in {"CODIGO", "CÓDIGO", "PRODUCTO", "SERVICIO", "PRODUCTO / SERVICIO", "PRODUCTO SERVICIO"}:
+        return None
+    if re.fullmatch(r"[\d\s.,$%-]+", value):
+        return None
+    if re.match(r"^(?:CANTIDAD|U\.?\s*MEDIDA|PRECIO|SUBTOTAL|IMPORTE|BONIF)\b", upper):
+        return None
+    if re.match(r"^\d+(?:[,.]\d+)?\s+(?:UNIDADES?|UNIDAD|SERVICIOS?|MES|KG|HS?|HORAS?)\b", upper):
+        return None
+    if re.match(r"^(?:SUBTOTAL|IMPORTE\s+TOTAL|CAE|FECHA\s+DE\s+VTO|COMPROBANTE\s+AUTORIZADO)\b", upper):
+        return None
+    return value
+
+
+def extract_arca_display_descriptions(text):
+    """Extract ARCA visible descriptions even when OCR split table amounts away."""
+    lines = [re.sub(r"\s+", " ", line).strip() for line in str(text or "").splitlines()]
+    descriptions = []
+    seen = set()
+    in_product_table = False
+    in_description_table = False
+
+    def add_candidate(value):
+        value = clean_arca_description_candidate(value)
+        if not value:
+            return
+        key = value.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        descriptions.append(value)
+
+    for line in lines:
+        upper = line.upper()
+        if re.search(r"PRODUCTO\s*/?\s*SERVICIO|C[ÓO�]?DIGO\s+PRODUCTO", upper):
+            in_product_table = True
+            in_description_table = False
+            inline = re.split(r"PRODUCTO\s*/?\s*SERVICIO", line, flags=re.IGNORECASE)
+            if len(inline) > 1:
+                add_candidate(inline[-1])
+            continue
+        if re.search(r"\bDESCRIPCI[ÓO0]N\b", upper):
+            in_description_table = True
+            in_product_table = False
+            inline = re.split(r"DESCRIPCI[ÓO0]N(?:\s+IMPORTE)?", line, flags=re.IGNORECASE)
+            if len(inline) > 1:
+                add_candidate(inline[-1])
+            continue
+
+        if not (in_product_table or in_description_table):
+            continue
+        if re.search(
+            r"^(?:SUBTOTAL|NETO\s+GRAVADO|IMPORTE\s+OTROS|IMPORTE\s+TOTAL|IVA\b|I\.?V\.?A\.?|"
+            r"PERCEPCI|IIBB\b|TOTAL\b|CAE\b|FECHA\s+DE\s+VTO|FECHA\s+DE\s+VENCIMIENTO|"
+            r"S\.E\.U\.O\.|COMPROBANTE\s+AUTORIZADO)",
+            upper,
+        ):
+            break
+        if not line:
+            continue
+
+        candidate = re.sub(r"^\d{1,4}\s+", "", line)
+        candidate = re.sub(
+            r"\s+\d+(?:[,.]\d+)?\s+(?:unidades?|unidad|servicios?|mes|kg|hs?|horas?)\b.*$",
+            "",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+        candidate = re.sub(r"\s+\$?\s*-?[\d.,]+(?:\s+\$?\s*-?[\d.,]+){1,}\s*$", "", candidate)
+        add_candidate(candidate)
+
+    return descriptions
 
 
 def extract_arca_reference_items(text):
@@ -846,7 +948,8 @@ def build_display_description(parsed, source_text=None):
         or extract_arca_reference_items(source_text)
         or extract_arca_concept_items(source_text)
     )
-    return _join_display_values([item["descripcion"] for item in fallback_items])
+    fallback_descriptions = [item["descripcion"] for item in fallback_items]
+    return _join_display_values(fallback_descriptions or extract_arca_display_descriptions(source_text))
 
 
 def first_labeled_money(label_pattern, text, flags=re.IGNORECASE, radius=100):
@@ -3598,18 +3701,11 @@ def apply_arca_document_code_hint(parsed, ocr_text):
         return parsed
 
     text = str(ocr_text or "")
-    code_text = (
-        first_match(r"Archivo:.*?\b\d{10,11}_(\d{3})_\d{4,5}_\d{7,9}\.pdf", text, re.IGNORECASE)
-        or first_match(r"C[oóÓÃ³0]D\.?\s*0*(\d{1,3})", text, re.IGNORECASE)
-    )
-    if not code_text:
+    code = extract_arca_document_code(text)
+    if code not in ARCA_LETTER_BY_CODE:
         return parsed
 
-    code = int(code_text)
-    letter_by_code = {1: "A", 6: "B", 11: "C"}
-    letter = letter_by_code.get(code)
-    if not letter:
-        return parsed
+    letter = ARCA_LETTER_BY_CODE[code]
 
     normalized = dict(parsed)
     document_kind = "Factura"
