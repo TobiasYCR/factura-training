@@ -664,6 +664,12 @@ def clean_arca_description_candidate(value):
     noise_prefix = value[: service_match.start()] if service_match else ""
     if service_match and service_match.start() > 0 and re.search(r"[\[\]|]", noise_prefix):
         value = service_match.group(0).strip(" :;-|[]")
+    value = re.split(
+        r"\s*;\s*(?:otros\s+tributos|per[./\s-]*ret|percepci(?:on|ón)|i\.?v\.?a\.?|iva\b|"
+        r"ingresos\s+brutos|impuestos?\s+(?:internos|municipales|a\s+las\s+ganancias))\b",
+        value,
+        flags=re.IGNORECASE,
+    )[0].strip()
     value = re.sub(
         r"\s+\d+[,.]\d+\s+(?:(?!\b(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b).)*$",
         "",
@@ -676,6 +682,7 @@ def clean_arca_description_candidate(value):
         value,
         flags=re.IGNORECASE,
     )
+    value = re.sub(r"\s+y\s+unidades?\b.*$", "", value, flags=re.IGNORECASE)
     upper = value.upper()
     if upper in {"CODIGO", "CÓDIGO", "PRODUCTO", "SERVICIO", "PRODUCTO / SERVICIO", "PRODUCTO SERVICIO"}:
         return None

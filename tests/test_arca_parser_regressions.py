@@ -233,6 +233,57 @@ Fecha de Vto. de CAE: 17/04/2021
 
         self.assertEqual(parsed["descripcion"], "Servicios profesionales")
 
+    def test_arca_description_removes_tax_tail_after_service_text(self):
+        text = """Archivo: sample 20328965322_001_00002_00000122.pdf
+ORIGINAL
+WEST TECH INFORMATICA
+A
+FACTURA
+COD. 001
+Punto de Venta: 00002 Comp. Nro: 00000122
+Fecha de Emisión: 07/04/2021
+CUIT: 20328965322
+Razón Social: WEST TECH INFORMATICA
+Condición frente al IVA: IVA Responsable Inscripto
+CUIT: 30715444530 Apellido y Nombre / Razón Social: CS TECH CONSULTING S.A.
+Condición frente al IVA: IVA Responsable Inscripto
+Condición de venta: Otra
+ite |rta sence | cani [meo] ro Juan] as [e; Mantenimiento de Pc, Impresoras y Redes; Otros Tributos; Per./Ret. de Impuesto a las Ganancias; Per./Ret. de IVA; Per./Ret. Ingresos Brutos
+Subtotal: $ 360000,00
+IVA 21%: $ 75600,00
+Importe Total: $ 435600,00
+CAE N°: 71142372132304
+Fecha de Vto. de CAE: 17/04/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["descripcion"], "Mantenimiento de Pc, Impresoras y Redes")
+
+    def test_arca_description_removes_noise_before_honorarios(self):
+        text = """Archivo: sample 20235490499_011_00001_00000029.pdf
+ORIGINAL
+BONATO JUAN CARLOS
+C
+FACTURA
+COD. 011
+Punto de Venta: 00001 Comp. Nro: 00000029
+Fecha de Emisión: 13/04/2021
+CUIT: 20235490499
+Razón Social: BONATO JUAN CARLOS
+Condición frente al IVA: Responsable Monotributo
+CUIT: 30715444530 Apellido y Nombre / Razón Social: CS TECH CONSULTING S.A.
+Condición frente al IVA: IVA Responsable Inscripto
+Condición de venta: Contado
+eago [Ipresos co Ju coins [te] o | stn y Honorarios Profesionales
+Subtotal: $ 16250,00
+Importe Total: $ 16250,00
+CAE N°: 71159645126859
+Fecha de Vto. de CAE: 23/04/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["descripcion"], "Honorarios Profesionales")
+
     def test_osde_reference_becomes_display_description(self):
         text = """Archivo: 01 Enero - Osde 0070-00125470.pdf
 OSDE
