@@ -183,6 +183,31 @@ Fecha de Vto. de CAE: 18/04/2021
         self.assertEqual(parsed["tipo_comprobante"], "Factura C")
         self.assertEqual(parsed["descripcion"], "Consultoria SAP - 2021/04")
 
+    def test_arca_description_removes_ocr_noise_before_service_text(self):
+        text = """Archivo: sample 20247883933_011_00001_00000075.pdf
+ORIGINAL
+SALAS DIEGO RODRIGO
+C
+FACTURA
+COD. 011
+Punto de Venta: 00001 Comp. Nro: 00000075
+Fecha de Emisión: 08/04/2021
+CUIT: 20247883933
+Razón Social: SALAS DIEGO RODRIGO
+Condición frente al IVA: Responsable Monotributo
+CUIT: 30715444530 Apellido y Nombre / Razón Social: CS TECH CONSULTING S.A.
+Condición frente al IVA: IVA Responsable Inscripto
+Condición de venta: Otra
+eago [Presos co Ju coins [te] o | stn y Consultoria SAP - 2021/04 11,00 unidades 9500,00 0,00 0,00 104500,00
+Subtotal: $ 104500,00
+Importe Total: $ 104500,00
+CAE N°: 71143416520094
+Fecha de Vto. de CAE: 18/04/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["descripcion"], "Consultoria SAP - 2021/04")
+
     def test_osde_reference_becomes_display_description(self):
         text = """Archivo: 01 Enero - Osde 0070-00125470.pdf
 OSDE

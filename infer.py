@@ -630,7 +630,7 @@ def extract_arca_items(text):
                 ),
             }
 
-        description = clean_arca_name(match_data["description"])
+        description = clean_arca_description_candidate(match_data["description"])
         if not description or description.upper() in {"PRODUCTO / SERVICIO", "PRODUCTO SERVICIO"}:
             continue
         item_key = (description, match_data["quantity"], match_data["amount"])
@@ -652,6 +652,18 @@ def clean_arca_description_candidate(value):
     value = clean_arca_name(value)
     if not value:
         return None
+    service_match = re.search(
+        r"\b("
+        r"consultor(?:ia|ía)|servicios?|honorarios?|abono|mantenimiento|desarrollo|"
+        r"soporte|capacitaci(?:on|ón)|asesoramiento|comisi(?:on|ón)|alquiler|"
+        r"reparaci(?:on|ón)|implementaci(?:on|ón)|integraci(?:on|ón)"
+        r")\b.*$",
+        value,
+        re.IGNORECASE,
+    )
+    noise_prefix = value[: service_match.start()] if service_match else ""
+    if service_match and service_match.start() > 0 and re.search(r"[\[\]|]", noise_prefix):
+        value = service_match.group(0).strip(" :;-|[]")
     upper = value.upper()
     if upper in {"CODIGO", "CÓDIGO", "PRODUCTO", "SERVICIO", "PRODUCTO / SERVICIO", "PRODUCTO SERVICIO"}:
         return None
@@ -989,7 +1001,7 @@ def build_display_description(parsed, source_text=None):
 
     items = parsed.get("items") or []
     descriptions = [
-        clean_arca_name(item.get("descripcion"))
+        clean_arca_description_candidate(item.get("descripcion"))
         for item in items
         if isinstance(item, dict) and item.get("descripcion")
     ]
