@@ -476,6 +476,95 @@ Saldo adeudado (ARS) $ 0,00
         self.assertIn("deeptics.com.ar", parsed["items"][0]["description"])
         self.assertIn("deeptics.com.ar", build_display_description(parsed))
 
+    def test_compact_industrial_usd_invoice_is_parsed(self):
+        text = """ORIGINAL
+FECHADEEMISIÓN:22.12.2025
+FACTURA 0013-00000022
+C.U.I.T.N°: 30-56976625-3
+A
+Codigo001 INICIOACTIVIDADES: 20.11.1978
+SEÑOR(ES): NININABAKERYS.A.
+IVARESPONSABLEINSCRIPTO CUITN° 30-71369120-4 IVAResponsableInscripto
+ITEM CANT. DESCRIPCION PRECIO TOTAL
+000100 3,000 EV910853-CG53-1012/C 95,01 95,01
+000200 1,000 EV910031-CB20-124E1/C 287,57 287,57
+SUBTOTALUSD 382,58
+IVA21.0% 80,34
+TOTALFACTURA USD462,92
+CAE: 75513850400277
+Vencimiento: 01.01.2026
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["tipo_comprobante"], "Factura A")
+        self.assertEqual(parsed["numero_factura"], "00013-00000022")
+        self.assertEqual(parsed["moneda"], "DOL")
+        self.assertIsNone(parsed["emisor"]["nombre"])
+        self.assertEqual(parsed["subtotal"], 382.58)
+        self.assertEqual(parsed["total"], 462.92)
+        self.assertEqual(parsed["cae"], "75513850400277")
+        self.assertEqual(parsed["fecha_vencimiento_cae"], "2026-01-01")
+        self.assertEqual(len(parsed["items"]), 2)
+        self.assertEqual(parsed["descripcion"], "EV910853-CG53-1012/C y EV910031-CB20-124E1/C")
+
+    def test_cianbox_detail_table_items_are_parsed(self):
+        text = """A Factura
+Nº 0003-00019315
+Cod. 01
+Fecha: 30/03/2021
+C.U.I.T. 30-71450816-0
+de Digital Store Tec SRL
+Responsable Inscripto Inicio de Actividades: Junio de 2014
+Sr./es CS TECH CONSULTING S.A Tel.: **
+I.V.A. Responsable Inscripto CUIT 30-71544453-0
+Cantidad Detalle Alicuota P.Unit. S.Total
+1,00 Costo MercadoEnvios 21,00% 363,6281 363,63
+1,00 Handy Baofeng BF-T3 Azul (par) 10,50% 1.447,0588 1.447,06
+ORIGINAL :: pag. 1/1 No Gravado $ 0,00
+Gravado $ 1.810,69
+I.V.A. 21,00% $ 76,36
+I.V.A. 10,50% $ 151,94
+Total $ 2.038,99
+C.A.E. Nº 71130959925098 Fecha Vto. C.A.E.: 09/04/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["numero_factura"], "00003-00019315")
+        self.assertEqual(parsed["emisor"]["nombre"], "Digital Store Tec SRL")
+        self.assertEqual(parsed["emisor"]["cuit"], "30-71450816-0")
+        self.assertEqual(parsed["receptor"]["cuit"], "30-71544453-0")
+        self.assertEqual(len(parsed["items"]), 2)
+        self.assertEqual(parsed["descripcion"], "Costo MercadoEnvios y Handy Baofeng BF-T3 Azul (par)")
+
+    def test_telecom_description_works_without_concept_header(self):
+        text = """Archivo: 01 Enero - CV 8340-03607681.pdf
+8340-03607681 Total Factura 3725,64
+Telecom Argentina S.A.
+La Pampa 2295 P.B A FECHA: 19-01-2020
+C.U.I.T.:30639453738
+Codigo N° 01
+Cablevisión Flow Box 02-2020 1807,44
+Adicional Cablevisión Flow Box 02-2020 179,34
+Servicios de Television Subtotal 1986,78
+Pack Fútbol 02-2020 549,59
+Packs Premium Subtotal 549,59
+Fibertel 100 Megas Wifi 02-2020 2458,68
+Servicios Banda Ancha (SBA) Subtotal 2379,37
+Promoción Combo Mes 3 de 12 12MX47% -2005,08
+Promocion COMBO Subtotal -2005,08
+Neto Gravado Subtotal 2910,66
+I.V.A. 21% 611,24
+TOTAL $3725,64
+CAE Nro.: 70038951261058
+Fecha Vto.: 29-01-2020
+"""
+        description = build_display_description({"items": [], "tipo_comprobante": "Factura A"}, text)
+
+        self.assertEqual(
+            description,
+            "Servicios de televisión, packs premium, internet 100 megas y descuentos correspondientes al período 02-2020.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
