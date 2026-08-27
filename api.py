@@ -15,6 +15,7 @@ from infer import (
     LORA_MODEL,
     build_arca_invoice_identifier,
     build_display_description,
+    clean_arca_description_candidate,
     derive_iva_percentage,
     extract_json,
     finalize_invoice_json,
@@ -110,7 +111,9 @@ def add_arca_integration_fields(data, source_text=None):
         if iva_percentage is not None:
             enriched["iva_porcentaje"] = iva_percentage
 
-    description = build_display_description(data, source_text)
+    description = build_display_description(data, source_text) or enriched.get("descripcion")
+    if description and not data.get("document_type"):
+        description = clean_arca_description_candidate(description) or description
     if description:
         enriched["descripcion"] = description
     return enriched

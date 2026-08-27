@@ -309,6 +309,23 @@ Fecha de Vto. de CAE: 22/04/2021
 
         self.assertEqual(parsed["descripcion"], "Consultoria Abap Marzo")
 
+    def test_api_final_description_cleanup_covers_existing_dirty_value(self):
+        parsed = {
+            "tipo_comprobante": "Factura C",
+            "codigo_comprobante": 11,
+            "punto_venta": "00002",
+            "numero_comprobante": "00000071",
+            "numero_factura": "00002-00000071",
+            "emisor": {"cuit": "20-30718672-2", "doc_nro": "20307186722"},
+            "iva": [],
+            "items": [],
+            "descripcion": "eago [presos co Ju coins [te] o | stn y Consultoria Abap Marzo",
+        }
+
+        enriched = add_arca_integration_fields(parsed, "")
+
+        self.assertEqual(enriched["descripcion"], "Consultoria Abap Marzo")
+
     def test_osde_reference_becomes_display_description(self):
         text = """Archivo: 01 Enero - Osde 0070-00125470.pdf
 OSDE
