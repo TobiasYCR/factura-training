@@ -12,7 +12,11 @@ DEFAULT_DATA_FILES = [
     "data/real_train.jsonl",
     "data/synthetic_invoices/synthetic_train.jsonl",
 ]
-DEFAULT_MAX_SEQ_LENGTH = 2048
+DEFAULT_BASE_MODEL = "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+DEFAULT_LORA_OUTPUT_DIR = "factura-qwen-lora"
+DEFAULT_MAX_SEQ_LENGTH = 4096
+DEFAULT_LORA_R = 16
+DEFAULT_LORA_ALPHA = 32
 strict_instruction = (
     "Converti este texto OCR de una factura ARCA en un unico objeto JSON valido. "
     "No inventes datos: si falta un dato usa null; para iva, tributos e items usa array vacio. "
@@ -49,6 +53,10 @@ def parse_args():
     )
     parser.add_argument("--max-steps", type=int, default=160)
     parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH)
+    parser.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
+    parser.add_argument("--lora-output-dir", default=DEFAULT_LORA_OUTPUT_DIR)
+    parser.add_argument("--lora-r", type=int, default=DEFAULT_LORA_R)
+    parser.add_argument("--lora-alpha", type=int, default=DEFAULT_LORA_ALPHA)
     return parser.parse_args()
 
 
@@ -60,15 +68,15 @@ def main():
         print(f"- {data_file}")
 
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit",
+        model_name=args.base_model,
         max_seq_length=args.max_seq_length,
         load_in_4bit=True,
     )
 
     model = FastLanguageModel.get_peft_model(
         model,
-        r=8,
-        lora_alpha=16,
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
         lora_dropout=0,
         bias="none",
         use_gradient_checkpointing="unsloth",
@@ -132,11 +140,11 @@ def main():
 
     trainer.train()
 
-    model.save_pretrained("factura-qwen-lora")
-    tokenizer.save_pretrained("factura-qwen-lora")
+    model.save_pretrained(args.lora_output_dir)
+    tokenizer.save_pretrained(args.lora_output_dir)
 
     print("Entrenamiento terminado.")
-    print("Modelo LoRA guardado en: factura-qwen-lora")
+    print(f"Modelo LoRA guardado en: {args.lora_output_dir}")
 
 
 if __name__ == "__main__":

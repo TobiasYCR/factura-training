@@ -4,9 +4,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-BASE_MODEL = "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit"
+BASE_MODEL = "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
 LORA_MODEL = "factura-qwen-lora"
-MAX_SEQ_LENGTH = 2048
+MAX_SEQ_LENGTH = 4096
 DEFAULT_INSTRUCTION = (
     "Converti este texto OCR de una factura ARCA en un unico objeto JSON valido. "
     "No inventes datos: si falta un dato usa null; para iva, tributos e items usa array vacio. "
