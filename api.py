@@ -24,7 +24,15 @@ from infer import (
     parse_supported_document_ocr,
     validate_extracted_document_json,
 )
-from ocr import DEFAULT_OCR_DPI, DEFAULT_OCR_LANG, OcrUnavailableError, get_ocr_status, ocr_image_bytes, ocr_pdf_bytes
+from ocr import (
+    DEFAULT_OCR_DPI,
+    DEFAULT_OCR_LANG,
+    DEFAULT_OCR_MULTIPASS,
+    OcrUnavailableError,
+    get_ocr_status,
+    ocr_image_bytes,
+    ocr_pdf_bytes,
+)
 
 MAX_UPLOAD_BYTES = int(os.environ.get("FACTURA_MAX_UPLOAD_MB", "25")) * 1024 * 1024
 MODEL_CACHE = {}
@@ -181,18 +189,25 @@ def extract_embedded_pdf_text(pdf_bytes):
     return "", {"method": "embedded_text", "engine": None, "errors": errors}
 
 
-def extract_upload_text(file_bytes, filename, force_ocr=False, ocr_lang=DEFAULT_OCR_LANG, ocr_dpi=DEFAULT_OCR_DPI):
+def extract_upload_text(
+    file_bytes,
+    filename,
+    force_ocr=False,
+    ocr_lang=DEFAULT_OCR_LANG,
+    ocr_dpi=DEFAULT_OCR_DPI,
+    ocr_multipass=DEFAULT_OCR_MULTIPASS,
+):
     suffix = Path(filename).suffix.lower()
     if suffix == ".pdf":
         if not force_ocr:
             text, meta = extract_embedded_pdf_text(file_bytes)
             if text and not looks_like_broken_embedded_text(text):
                 return text, meta
-        text, ocr_meta = ocr_pdf_bytes(file_bytes, lang=ocr_lang, dpi=ocr_dpi)
+        text, ocr_meta = ocr_pdf_bytes(file_bytes, lang=ocr_lang, dpi=ocr_dpi, multipass=ocr_multipass)
         return text, {"method": "ocr", **ocr_meta}
 
     if suffix in IMAGE_EXTENSIONS:
-        text, ocr_meta = ocr_image_bytes(file_bytes, lang=ocr_lang)
+        text, ocr_meta = ocr_image_bytes(file_bytes, lang=ocr_lang, multipass=ocr_multipass)
         return text, {"method": "ocr", **ocr_meta}
 
     raise ValueError("Por ahora el endpoint acepta PDF o imagenes png/jpg/tiff/bmp/webp.")
@@ -361,6 +376,38 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                 model_policy=request["model_policy"],
                 min_confidence=request["min_confidence"],
             )
+            ocr_attempts = [request["text_extractor"]] if request["text_extractor"] else []
+            if (
+                request.get("ocr_policy") == "auto"
+                and request.get("file_bytes")
+                and not (
+                    (request.get("text_extractor") or {}).get("method") == "ocr"
+                    and (request.get("text_extractor") or {}).get("multipass")
+                )
+                and (not result["ok"] or result["confidence"] < request["min_confidence"])
+            ):
+                retry_text, retry_extractor = extract_upload_text(
+                    request["file_bytes"],
+                    request["filename"],
+                    force_ocr=True,
+                    ocr_lang=request["ocr_lang"],
+                    ocr_dpi=request["ocr_dpi"],
+                    ocr_multipass=True,
+                )
+                retry_result = extract_document(
+                    retry_text,
+                    filename=request["filename"],
+                    use_model=request["use_model"],
+                    model_choice=request["model"],
+                    max_new_tokens=request["max_new_tokens"],
+                    model_policy=request["model_policy"],
+                    min_confidence=request["min_confidence"],
+                )
+                ocr_attempts.append(retry_extractor)
+                if (retry_result["ok"] and not result["ok"]) or retry_result["confidence"] >= result["confidence"]:
+                    request["ocr_text"] = retry_text
+                    request["text_extractor"] = retry_extractor
+                    result = retry_result
             parser_text = (
                 f"Archivo: {request['filename']}\n{request['ocr_text']}"
                 if request["filename"]
@@ -370,6 +417,8 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             result["input"] = {
                 "filename": request["filename"],
                 "text_extractor": request["text_extractor"],
+                "ocr_policy": request["ocr_policy"],
+                "ocr_attempts": ocr_attempts,
                 "ocr_text_length": len(request["ocr_text"]),
             }
             result["request_id"] = request_id
@@ -443,6 +492,9 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
         if model_policy not in {"fallback", "low_confidence", "always"}:
             raise ValueError("model_policy debe ser 'fallback', 'low_confidence' o 'always'.")
         force_ocr = parse_bool(get_first(fields, query, "force_ocr", False), default=False)
+        ocr_policy = str(get_first(fields, query, "ocr_policy", "auto") or "auto")
+        if ocr_policy not in {"auto", "fast", "robust"}:
+            raise ValueError("ocr_policy debe ser 'auto', 'fast' o 'robust'.")
         max_new_tokens = parse_int(get_first(fields, query, "max_new_tokens", 900), 900)
         try:
             min_confidence = float(get_first(fields, query, "min_confidence", 0.82))
@@ -450,6 +502,11 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             min_confidence = 0.82
         ocr_lang = str(get_first(fields, query, "ocr_lang", DEFAULT_OCR_LANG) or DEFAULT_OCR_LANG)
         ocr_dpi = parse_int(get_first(fields, query, "ocr_dpi", DEFAULT_OCR_DPI), DEFAULT_OCR_DPI)
+        ocr_multipass_raw = get_first(fields, query, "ocr_multipass", None)
+        if ocr_multipass_raw is None:
+            ocr_multipass = ocr_policy == "robust"
+        else:
+            ocr_multipass = parse_bool(ocr_multipass_raw, default=DEFAULT_OCR_MULTIPASS)
         ocr_text = get_first(fields, query, "ocr_text", "")
         filename = None
         text_extractor = None
@@ -463,6 +520,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                 force_ocr=force_ocr,
                 ocr_lang=ocr_lang,
                 ocr_dpi=ocr_dpi,
+                ocr_multipass=ocr_multipass,
             )
             if not ocr_text:
                 raise ValueError("No se pudo extraer texto del archivo.")
@@ -474,6 +532,10 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             "filename": filename,
             "text_extractor": text_extractor,
             "ocr_text": str(ocr_text).strip(),
+            "file_bytes": uploaded["content"] if uploaded else None,
+            "ocr_lang": ocr_lang,
+            "ocr_dpi": ocr_dpi,
+            "ocr_policy": ocr_policy,
             "use_model": use_model,
             "model": model,
             "model_policy": model_policy,

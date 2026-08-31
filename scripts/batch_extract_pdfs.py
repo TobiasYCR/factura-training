@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from api import extract_document, extract_upload_text
-from ocr import OcrUnavailableError
+from ocr import DEFAULT_OCR_MULTIPASS, OcrUnavailableError
 
 
 def safe_output_name(path):
@@ -56,29 +56,62 @@ def process_file(path, args):
     }
 
     try:
+        file_bytes = path.read_bytes()
+        first_multipass = args.ocr_policy == "robust" or args.ocr_multipass
         text, text_extractor = extract_upload_text(
-            path.read_bytes(),
+            file_bytes,
             path.name,
             force_ocr=args.force_ocr,
             ocr_lang=args.ocr_lang,
             ocr_dpi=args.ocr_dpi,
+            ocr_multipass=first_multipass,
         )
-        if args.write_ocr:
-            output_text = args.output_dir / f"{safe_output_name(path)}.txt"
-            output_text.write_text(text, encoding="utf-8")
-            result["ocr_text_file"] = str(output_text)
-
+        ocr_attempts = [text_extractor]
         parser_text = f"Archivo: {path.name}\n{text}"
         extracted = extract_document(
             parser_text,
             use_model=args.use_model,
             model_choice=args.model,
             max_new_tokens=args.max_new_tokens,
+            min_confidence=args.min_confidence,
         )
+        if (
+            args.ocr_policy == "auto"
+            and not (text_extractor.get("method") == "ocr" and text_extractor.get("multipass"))
+            and (not extracted["ok"] or extracted["confidence"] < args.min_confidence)
+        ):
+            retry_text, retry_extractor = extract_upload_text(
+                file_bytes,
+                path.name,
+                force_ocr=True,
+                ocr_lang=args.ocr_lang,
+                ocr_dpi=args.ocr_dpi,
+                ocr_multipass=True,
+            )
+            retry_parser_text = f"Archivo: {path.name}\n{retry_text}"
+            retry_extracted = extract_document(
+                retry_parser_text,
+                use_model=args.use_model,
+                model_choice=args.model,
+                max_new_tokens=args.max_new_tokens,
+                min_confidence=args.min_confidence,
+            )
+            ocr_attempts.append(retry_extractor)
+            if (retry_extracted["ok"] and not extracted["ok"]) or retry_extracted["confidence"] >= extracted["confidence"]:
+                text = retry_text
+                text_extractor = retry_extractor
+                parser_text = retry_parser_text
+                extracted = retry_extracted
+        if args.write_ocr:
+            output_text = args.output_dir / f"{safe_output_name(path)}.txt"
+            output_text.write_text(text, encoding="utf-8")
+            result["ocr_text_file"] = str(output_text)
+
         result.update(
             {
                 "ok": extracted["ok"],
                 "text_extractor": text_extractor,
+                "ocr_attempts": ocr_attempts,
                 "ocr_text_length": len(text),
                 "source": extracted["source"],
                 "label": document_label(extracted["data"]),
@@ -109,9 +142,13 @@ def main():
     parser.add_argument("--force-ocr", action="store_true")
     parser.add_argument("--ocr-lang", default="spa+eng")
     parser.add_argument("--ocr-dpi", type=int, default=220)
+    parser.add_argument("--ocr-policy", choices=["fast", "auto", "robust"], default="fast")
+    parser.add_argument("--ocr-multipass", action="store_true", default=DEFAULT_OCR_MULTIPASS)
+    parser.add_argument("--no-ocr-multipass", action="store_false", dest="ocr_multipass")
     parser.add_argument("--use-model", action="store_true")
     parser.add_argument("--model", choices=["base", "lora"], default="lora")
     parser.add_argument("--max-new-tokens", type=int, default=900)
+    parser.add_argument("--min-confidence", type=float, default=0.82)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--write-json", action="store_true")
     parser.add_argument("--write-ocr", action="store_true", help="Guarda el texto extraido/OCR de cada archivo.")
@@ -146,6 +183,7 @@ def main():
     parser_count = 0
     model_count = 0
     ocr_count = 0
+    robust_retry_count = 0
 
     with summary_path.open("w", encoding="utf-8") as summary_file:
         for index, path in enumerate(paths, start=1):
@@ -157,6 +195,7 @@ def main():
             model_count += int(item["source"] == "model")
             text_extractor = item.get("text_extractor") or {}
             ocr_count += int(text_extractor.get("method") == "ocr")
+            robust_retry_count += int(len(item.get("ocr_attempts") or []) > 1)
             label = item.get("label") or {}
             status = "OK" if item["ok"] else "FAIL"
             print(
@@ -173,6 +212,7 @@ def main():
     print(f"Parser: {parser_count}")
     print(f"Modelo: {model_count}")
     print(f"OCR visual: {ocr_count}")
+    print(f"Reintentos OCR robusto: {robust_retry_count}")
     print(f"Resumen: {summary_path}")
 
 

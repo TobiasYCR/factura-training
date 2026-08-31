@@ -1,16 +1,18 @@
 import io
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 
 DEFAULT_OCR_LANG = os.environ.get("OCR_LANG", "spa+eng")
 DEFAULT_OCR_DPI = int(os.environ.get("OCR_DPI", "220"))
 DEFAULT_TESSERACT_PSM = os.environ.get("OCR_PSM", "6")
+DEFAULT_OCR_MULTIPASS = os.environ.get("OCR_MULTIPASS", "0").lower() not in {"0", "false", "no"}
 
 
 class OcrUnavailableError(RuntimeError):
@@ -32,6 +34,7 @@ def get_ocr_status():
         "command": tesseract,
         "default_lang": DEFAULT_OCR_LANG,
         "default_dpi": DEFAULT_OCR_DPI,
+        "multipass": DEFAULT_OCR_MULTIPASS,
     }
     if not tesseract:
         status["message"] = "Tesseract no esta instalado o no esta en PATH."
@@ -85,7 +88,42 @@ def load_image(image_bytes):
         return image.convert("RGB")
 
 
-def image_to_text(image, lang=DEFAULT_OCR_LANG, psm=DEFAULT_TESSERACT_PSM, timeout=60):
+def preprocess_image_variants(image):
+    base = image.convert("RGB")
+    variants = [("original", base)]
+
+    gray = ImageOps.grayscale(base)
+    gray = ImageOps.autocontrast(gray)
+    gray = ImageEnhance.Contrast(gray).enhance(1.7)
+    gray = ImageEnhance.Sharpness(gray).enhance(1.4)
+    enhanced = gray.convert("RGB")
+    variants.append(("enhanced", enhanced))
+
+    denoised = gray.filter(ImageFilter.MedianFilter(size=3))
+    threshold = denoised.point(lambda pixel: 255 if pixel > 175 else 0, mode="1").convert("RGB")
+    variants.append(("threshold", threshold))
+    return variants
+
+
+def score_ocr_text(text):
+    value = str(text or "")
+    if not value.strip():
+        return -10_000
+
+    upper = value.upper()
+    score = min(len(value), 12_000) / 100
+    score += 35 * len(re.findall(r"\b\d{2}-?\d{8}-?\d\b", value))
+    score += 30 * len(re.findall(r"\bCAE\b|\bCAI\b", upper))
+    score += 25 * len(re.findall(r"\bFACTURA\b|\bRECIBO\b|\bNOTA\s+DE\s+(?:CREDITO|DEBITO)\b", upper))
+    score += 18 * len(re.findall(r"\b(?:TOTAL|SUBTOTAL|NETO\s+GRAVADO|IVA|PERCEP|TRIBUTOS?)\b", upper))
+    score += 12 * len(re.findall(r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b", value))
+    score += 8 * len(re.findall(r"\$?\s*\d{1,3}(?:\.\d{3})*,\d{2}|\$?\s*\d+\.\d{2}", value))
+    score -= 20 * value.count("�")
+    score -= 3 * len(re.findall(r"[|{}\[\]~]{2,}", value))
+    return score
+
+
+def run_tesseract(image, lang=DEFAULT_OCR_LANG, psm=DEFAULT_TESSERACT_PSM, timeout=60):
     tesseract = find_tesseract()
     if not tesseract:
         raise OcrUnavailableError(
@@ -123,11 +161,51 @@ def image_to_text(image, lang=DEFAULT_OCR_LANG, psm=DEFAULT_TESSERACT_PSM, timeo
         image_path.unlink(missing_ok=True)
 
 
-def ocr_pdf_bytes(pdf_bytes, lang=DEFAULT_OCR_LANG, dpi=DEFAULT_OCR_DPI, max_pages=None):
+def image_to_text(image, lang=DEFAULT_OCR_LANG, psm=DEFAULT_TESSERACT_PSM, timeout=60):
+    return run_tesseract(image, lang=lang, psm=psm, timeout=timeout)
+
+
+def image_to_best_text(image, lang=DEFAULT_OCR_LANG, timeout=60, multipass=DEFAULT_OCR_MULTIPASS):
+    passes = [("original", DEFAULT_TESSERACT_PSM, image)]
+    if multipass:
+        passes = [
+            (variant_name, psm, variant_image)
+            for variant_name, variant_image in preprocess_image_variants(image)
+            for psm in ("6", "4")
+        ]
+
+    results = []
+    best = None
+    for variant_name, psm, variant_image in passes:
+        try:
+            text = run_tesseract(variant_image, lang=lang, psm=psm, timeout=timeout)
+        except OcrUnavailableError:
+            if results:
+                continue
+            raise
+        score = score_ocr_text(text)
+        result = {
+            "variant": variant_name,
+            "psm": str(psm),
+            "score": round(score, 2),
+            "length": len(text or ""),
+        }
+        results.append(result)
+        if best is None or score > best[0]:
+            best = (score, text or "", result)
+
+    if best is None:
+        return "", {"variant": "none", "psm": None, "score": 0, "passes": results}
+    return best[1].strip(), {**best[2], "passes": results}
+
+
+def ocr_pdf_bytes(pdf_bytes, lang=DEFAULT_OCR_LANG, dpi=DEFAULT_OCR_DPI, max_pages=None, multipass=DEFAULT_OCR_MULTIPASS):
     pages = render_pdf_pages(pdf_bytes, dpi=dpi, max_pages=max_pages)
     texts = []
+    page_results = []
     for index, page in enumerate(pages, start=1):
-        text = image_to_text(page, lang=lang)
+        text, page_meta = image_to_best_text(page, lang=lang, multipass=multipass)
+        page_results.append({"page": index, **page_meta})
         if text:
             texts.append(f"--- OCR PAGE {index} ---\n{text}")
     return "\n\n".join(texts).strip(), {
@@ -135,15 +213,19 @@ def ocr_pdf_bytes(pdf_bytes, lang=DEFAULT_OCR_LANG, dpi=DEFAULT_OCR_DPI, max_pag
         "lang": lang,
         "dpi": dpi,
         "pages": len(pages),
+        "multipass": multipass,
+        "page_results": page_results,
     }
 
 
-def ocr_image_bytes(image_bytes, lang=DEFAULT_OCR_LANG):
+def ocr_image_bytes(image_bytes, lang=DEFAULT_OCR_LANG, multipass=DEFAULT_OCR_MULTIPASS):
     image = load_image(image_bytes)
-    text = image_to_text(image, lang=lang)
+    text, image_meta = image_to_best_text(image, lang=lang, multipass=multipass)
     return text.strip(), {
         "engine": "tesseract",
         "lang": lang,
         "dpi": None,
         "pages": 1,
+        "multipass": multipass,
+        "page_results": [{"page": 1, **image_meta}],
     }
