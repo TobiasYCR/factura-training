@@ -602,6 +602,41 @@ Fecha Vto: 29/03/2021
             "Servicios de televisión, packs premium, internet 100 megas y descuentos correspondientes al período 04-2021.",
         )
 
+    def test_fibertel_infers_tax_totals_when_ocr_omits_fiscal_lines(self):
+        text = """Archivo: 03 Marzo - CV 6723-01613211.pdf
+Cablevisión Fibertel
+Telecom Argentina S.A. FACTURA N°: 6723-01613211
+FECHA: 19-03-2021
+A C.U.I.T.:30639453738
+SR./A: TECH CONSULTING SA CS FORMA DE PAGO: Debito Automatico
+PERIODO: 04-2021
+CUIT No: 30-71544453-0
+CONCEPTOS IMPORTE
+Cablevisión Flow Box 04-2021 2.385,12
+Adicional Cablevisión Flow Box 04-2021 235,54
+Servicios de Television Subtotal 2620,66
+Pack Futbol 04-2021 686,78
+Packs Premium Subtotal 686,78
+Fibertel 100 Megas Wifi 04-2021 3.244,63
+Servicios Banda Ancha (SBA) Subtotal 3244,63
+Promo Débito Automático 6M 04-2021 -247,93
+0800 199 7771
+Promoción Combo Mes 3 de 6 6MX47% -2.645,99
+Promocion COMBO Subtotal -2645,99
+Neto Gravado Subtotal 3.658,15
+Total a pagar $4.682,45
+CAE Nro: 71128471020836
+Fecha Vto: 07/04/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["subtotal"], 3658.15)
+        self.assertEqual(parsed["iva_total"], 768.21)
+        self.assertEqual(parsed["tributos_total"], 256.09)
+        self.assertEqual(parsed["impuestos"], 1024.3)
+        self.assertEqual(parsed["total"], 4682.45)
+        self.assertEqual(parsed["iva_porcentaje"], 21.0)
+
     def test_osde_personalized_invoice_is_parsed(self):
         text = """Archivo: 04 Abril - Osde 0082-00118966.pdf
 OSDE

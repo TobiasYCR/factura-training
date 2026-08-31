@@ -3331,6 +3331,10 @@ def parse_telecom_fibertel_invoice_ocr(text):
     ]
     fiscal_totals.extend(
         parse_money(value)
+        for value in re.findall(r"\b(?:Total\s+a\s+pagar|Importe\s+Total|Total\s+Factura)\b[^\d$]{0,40}\$?\s*([\d.,]+)", text, re.IGNORECASE)
+    )
+    fiscal_totals.extend(
+        parse_money(value)
         for value in re.findall(r"^\s*\$\s*([\d.,]+)\s*$", text, re.IGNORECASE | re.MULTILINE)
     )
     fiscal_totals = [value for value in fiscal_totals if value is not None]
@@ -3341,6 +3345,17 @@ def parse_telecom_fibertel_invoice_ocr(text):
             iva_total = round_money(subtotal * 0.21)
             tributos_total = round_money(total - subtotal - iva_total)
             calculated_total = total
+    if (
+        subtotal is not None
+        and not iva_total
+        and not tributos_total
+        and letter == "A"
+        and ("FIBERTEL" in upper_text or "CABLEVISI" in upper_text)
+    ):
+        iva_total = round_money(subtotal * 0.21)
+        tributos_total = round_money(subtotal * 0.07)
+        total = round_money(subtotal + iva_total + tributos_total)
+        calculated_total = total
     if calculated_total and fiscal_totals:
         close_total = next((value for value in reversed(fiscal_totals) if abs(value - calculated_total) <= 1.0), None)
         total = close_total or calculated_total
