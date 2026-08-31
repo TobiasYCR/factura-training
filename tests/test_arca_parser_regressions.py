@@ -637,6 +637,35 @@ Fecha Vto: 07/04/2021
         self.assertEqual(parsed["total"], 4682.45)
         self.assertEqual(parsed["iva_porcentaje"], 21.0)
 
+    def test_fibertel_recovers_missing_subtotal_and_partial_taxes_from_total(self):
+        text = """Archivo: 04 Abril - CV 6723-01768328.pdf
+Cablevisión Fibertel
+Telecom Argentina S.A. FACTURA N°: 6723-01768328
+FECHA: 18-04-2021
+A C.U.I.T.:30639453738
+SR./A: CS TECH CONSULTING SA
+CUIT No: 30-71544453-0
+PERIODO: 05-2021
+CONCEPTOS IMPORTE
+Cablevisión Flow Box 05-2021
+Adicional Cablevisión Flow Box
+Pack Futbol
+Fibertel 100 Megas Wifi
+Percep. IVA-RG2408 109,75
+Total a pagar $4.682,45
+CAE Nro: 71168888473772
+Fecha Vto: 07/05/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["numero_factura"], "06723-01768328")
+        self.assertEqual(parsed["subtotal"], 3658.16)
+        self.assertEqual(parsed["iva_total"], 768.21)
+        self.assertEqual(parsed["tributos_total"], 256.08)
+        self.assertEqual(parsed["impuestos"], 1024.29)
+        self.assertEqual(parsed["total"], 4682.45)
+        self.assertEqual(parsed["iva_porcentaje"], 21.0)
+
     def test_osde_personalized_invoice_is_parsed(self):
         text = """Archivo: 04 Abril - Osde 0082-00118966.pdf
 OSDE

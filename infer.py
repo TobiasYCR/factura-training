@@ -1200,6 +1200,18 @@ def last_money_amount(text):
     return parse_money(amounts[-1])
 
 
+def money_amounts_near_label(text, label_pattern, max_chars=180):
+    values = []
+    source = str(text or "")
+    for match in re.finditer(label_pattern, source, re.IGNORECASE):
+        window = source[match.end() : match.end() + max_chars]
+        for value in re.findall(r"-?\$?\s*\d{1,3}(?:\.\d{3})*,\d{2}|-?\$?\s*\d+,\d{2}", window):
+            parsed = parse_money(value)
+            if parsed is not None:
+                values.append(parsed)
+    return values
+
+
 def enrich_arca_parser_result(parsed, text):
     if not isinstance(parsed, dict) or parsed.get("document_type"):
         return parsed
@@ -3298,6 +3310,13 @@ def parse_telecom_fibertel_invoice_ocr(text):
         parse_money(first_match(r"Neto\s+Gravado\s+(?:Subtotal\s*)?([\d.,]+)", text, re.IGNORECASE))
         or parse_money(first_match(r"Neto\s+Gravado.*?\$?\s*([\d.,]+)", text, re.IGNORECASE))
     )
+    if subtotal is None:
+        subtotal_candidates = [
+            value
+            for value in money_amounts_near_label(text, r"Neto\s+Gravado(?:\s+Subtotal)?", max_chars=120)
+            if value > 0
+        ]
+        subtotal = subtotal_candidates[0] if subtotal_candidates else None
     iva_total = (
         parse_money(first_match(r"I\.?\s*V\.?\s*A\.?\s*21\s*%?\s*([\d.,]+)", text, re.IGNORECASE))
         or parse_money(first_match(r"IVA\s*21\s*%?\s*([\d.,]+)", text, re.IGNORECASE))
@@ -3339,23 +3358,30 @@ def parse_telecom_fibertel_invoice_ocr(text):
     )
     fiscal_totals = [value for value in fiscal_totals if value is not None]
     total = calculated_total or (fiscal_totals[-1] if fiscal_totals else None)
-    if fiscal_totals and subtotal is not None and not iva_total and not tributos_total:
+    is_taxable_telecom = letter == "A" and ("FIBERTEL" in upper_text or "CABLEVISI" in upper_text)
+    if fiscal_totals:
         total = fiscal_totals[-1]
-        if total and total > subtotal:
+    if is_taxable_telecom and total and total > 0 and subtotal is None:
+        subtotal = round_money(total / 1.28)
+    if is_taxable_telecom and subtotal is not None:
+        if total is None or (total <= subtotal and not iva_total and not tributos_total):
+            total = round_money(subtotal + round_money(subtotal * 0.21) + round_money(subtotal * 0.07))
+        expected_balance = round_money(total - subtotal)
+        current_balance = round_money((iva_total or 0) + (tributos_total or 0))
+        if total > subtotal and (not iva_total or abs(expected_balance - current_balance) > 1.0):
             iva_total = round_money(subtotal * 0.21)
             tributos_total = round_money(total - subtotal - iva_total)
+            if tributos_total:
+                tributos = [
+                    {
+                        "codigo": 99,
+                        "descripcion": "Percepciones",
+                        "base_imponible": subtotal,
+                        "alicuota": None,
+                        "importe": tributos_total,
+                    }
+                ]
             calculated_total = total
-    if (
-        subtotal is not None
-        and not iva_total
-        and not tributos_total
-        and letter == "A"
-        and ("FIBERTEL" in upper_text or "CABLEVISI" in upper_text)
-    ):
-        iva_total = round_money(subtotal * 0.21)
-        tributos_total = round_money(subtotal * 0.07)
-        total = round_money(subtotal + iva_total + tributos_total)
-        calculated_total = total
     if calculated_total and fiscal_totals:
         close_total = next((value for value in reversed(fiscal_totals) if abs(value - calculated_total) <= 1.0), None)
         total = close_total or calculated_total
