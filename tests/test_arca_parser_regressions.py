@@ -630,6 +630,24 @@ Fecha de Vto. de CAE: 2021-05-25
         self.assertEqual(len(parsed["items"]), 2)
         self.assertEqual(parsed["descripcion"], 'Smart Tv 43" LG 43LM6350PSB FHD y Envio a Domicilio')
 
+    def test_cetrogar_personalized_invoice_defaults_buyer_name_from_known_cuit(self):
+        text = """Archivo: 05 Mayo - TV 30592845748_001_00427_00030715.pdf
+CETROGAR FACTURA
+Nro. Factura: 0427-00030715
+Fecha de Emisión: 15/05/2021 18:45
+CUIT: 30-59284574-8
+Documento: 30715444530
+Subtotal: $36.279,34
+IVA: $7.618,66
+Total: $43.898,00
+CAE Nº: 71208270852377
+Fecha de Vto. de CAE: 2021-05-25
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["receptor"]["nombre"], "CS Tech Consulting SA")
+        self.assertEqual(parsed["receptor"]["cuit"], "30-71544453-0")
+
     def test_hidroal_homecenter_invoice_is_parsed(self):
         text = """Archivo: 05 Mayo - Mesitas 0033-00016521.pdf
 HIDROAL HOME CENTER
@@ -665,6 +683,54 @@ CAE: 71207195310091 - Vencimiento: 24/05/2021
         self.assertEqual(parsed["cae"], "71207195310091")
         self.assertEqual(parsed["fecha_vencimiento_cae"], "2021-05-24")
         self.assertEqual(parsed["descripcion"], "MESA LUZ CENTRO ESTANT MLBW BOTINERO WENGUE")
+
+    def test_hidroal_homecenter_invoice_recovers_split_ocr_item(self):
+        text = """Archivo: 05 Mayo - Mesitas 0033-00016521.pdf
+HIDROAL HOME CENTER
+A Cod.01
+Factura N° 0033-00016521
+Fecha: 14/05/2021
+Razón Social: HIDROAL SA
+CUIT: 30628724497
+Nombre: CS TECH CONSULTING S.A.
+IVA: Responsable Inscripto
+CUIT: 30715444530
+Cantidad Detalle % IVA % Impuesto
+Interno Unitario
+MESA LUZ CENTRO ESTANT MLBW BOTINERO WENGUE
+Garantía: 6 meses
+Gravado: $ 3.069,45
+Importe Iva: $ 644,58
+Percepción Buenos Aires 4.00% $ 122,78
+Total: $ 3.836,81
+CAE: 71207195310091 - Vencimiento 24/05/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(len(parsed["items"]), 1)
+        self.assertEqual(parsed["items"][0]["descripcion"], "MESA LUZ CENTRO ESTANT MLBW BOTINERO WENGUE")
+        self.assertEqual(parsed["fecha_vencimiento_cae"], "2021-05-24")
+        self.assertEqual(parsed["descripcion"], "MESA LUZ CENTRO ESTANT MLBW BOTINERO WENGUE")
+
+    def test_osde_invoice_keeps_provider_cuit_when_first_cuit_is_buyer(self):
+        text = """Archivo: 02 Febrero - Osde 0078-00111613.pdf
+OSDE Factura: 0078-00111613
+Fecha de emisión: 24/02/2021
+CS TECH CONSULTING SA
+CUIL/CUIT:30-71544453-0
+Descripción Importe
+Total valor Plan de Servicio $ 37.785,51
+Neto Gravado $ 37.785,51
+IVA Inscripto 10,50% $ 3.967,48
+Percepción $ 2.833,91
+Total $ 44.586,90
+CAE: 71083175046030
+FECHA DE VENCIMIENTO: 06.03.2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["emisor"]["cuit"], "30-54674125-3")
+        self.assertEqual(parsed["receptor"]["cuit"], "30-71544453-0")
 
 
 if __name__ == "__main__":
