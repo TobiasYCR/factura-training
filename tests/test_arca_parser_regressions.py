@@ -565,6 +565,107 @@ Fecha Vto.: 29-01-2020
             "Servicios de televisión, packs premium, internet 100 megas y descuentos correspondientes al período 02-2020.",
         )
 
+    def test_osde_personalized_invoice_is_parsed(self):
+        text = """Archivo: 04 Abril - Osde 0082-00118966.pdf
+OSDE
+A Codigo: 01
+Factura: 0082-00118966
+Fecha de emisión: 26/04/2021
+CUIT: 30-54674125-3
+CS TECH CONSULTING SA
+CUIL/CUIT:30-71544453-0
+Descripción Importe
+Total valor Plan de Servicio $ 40.866,07
+Neto Gravado $ 40.866,07
+IVA Inscripto 10,50% $ 4.290,94
+Percepción $ 3.064,95
+Total $ 48.221,96
+CAE: 71173264375701
+FECHA DE VENCIMIENTO: 06.05.2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["numero_factura"], "00082-00118966")
+        self.assertEqual(parsed["emisor"]["nombre"], "OSDE")
+        self.assertEqual(parsed["emisor"]["cuit"], "30-54674125-3")
+        self.assertEqual(parsed["receptor"]["cuit"], "30-71544453-0")
+        self.assertEqual(parsed["subtotal"], 40866.07)
+        self.assertEqual(parsed["iva_total"], 4290.94)
+        self.assertEqual(parsed["tributos_total"], 3064.95)
+        self.assertEqual(parsed["total"], 48221.96)
+        self.assertEqual(parsed["cae"], "71173264375701")
+        self.assertEqual(parsed["fecha_vencimiento_cae"], "2021-05-06")
+        self.assertEqual(parsed["descripcion"], "Total valor Plan de Servicio")
+
+    def test_cetrogar_personalized_invoice_extracts_parties_and_items(self):
+        text = """Archivo: 05 Mayo - TV 30592845748_001_00427_00030715.pdf
+A
+FACTURA COD. 001
+Razón Social: CETROGAR S.A Nro. Factura: 0427-00030715
+Domicilio: Fecha de Emisión: 15/05/2021 18:45
+CUIT: 30-59284574-8
+IVA RESPONSABLE INSCRIPTO: 30-59284574-8
+Vendido a: Método de envío
+CS Tech Consulting SA Silvia Renee Mateo
+Documento: 30715444530 Documento: 30715444530
+Productos SKU Precio Cantidad Imp. Int IVA Total
+Smart Tv 43" LG 43LM6350PSB FHD TV2767 $35.536,36 1 $0,00 $7.462,64 $42.999,00
+Envio a Domicilio FL0005 $742,98 1 $0,00 $156,02 $899,00
+Subtotal: $36.279,34
+IVA: $7.618,66
+Total: $43.898,00
+CAE Nº: 71208270852377
+Fecha de Vto. de CAE: 2021-05-25
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["numero_factura"], "00427-00030715")
+        self.assertEqual(parsed["emisor"]["nombre"], "CETROGAR S.A")
+        self.assertEqual(parsed["emisor"]["cuit"], "30-59284574-8")
+        self.assertEqual(parsed["receptor"]["cuit"], "30-71544453-0")
+        self.assertEqual(parsed["subtotal"], 36279.34)
+        self.assertEqual(parsed["iva_total"], 7618.66)
+        self.assertEqual(parsed["total"], 43898.0)
+        self.assertEqual(parsed["cae"], "71208270852377")
+        self.assertEqual(len(parsed["items"]), 2)
+        self.assertEqual(parsed["descripcion"], 'Smart Tv 43" LG 43LM6350PSB FHD y Envio a Domicilio')
+
+    def test_hidroal_homecenter_invoice_is_parsed(self):
+        text = """Archivo: 05 Mayo - Mesitas 0033-00016521.pdf
+HIDROAL HOME CENTER
+A Cod.01
+Factura
+N° 0033-00016521
+Fecha: 14/05/2021
+Razón Social: HIDROAL SA
+CUIT: 30628724497
+Nombre: CS TECH CONSULTING S.A.
+IVA: Responsable Inscripto
+CUIT: 30715444530
+Condición de venta: Contado
+Cantidad Detalle % IVA % Impuesto Interno Precio Unitario Descuento Importe
+1,00 MESA LUZ CENTRO ESTANT MLBW BOTINERO WENGUE 21,00 0,00 3.069,45 0,00 $ 3.069,45
+Garantía: 6 meses
+Gravado: $ 3.069,45
+Importe Iva: $ 644,58
+Percepción Buenos Aires 4.00% $ 122,78
+Total: $ 3.836,81
+CAE: 71207195310091 - Vencimiento: 24/05/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["numero_factura"], "00033-00016521")
+        self.assertEqual(parsed["emisor"]["nombre"], "HIDROAL SA")
+        self.assertEqual(parsed["emisor"]["cuit"], "30-62872449-7")
+        self.assertEqual(parsed["receptor"]["cuit"], "30-71544453-0")
+        self.assertEqual(parsed["subtotal"], 3069.45)
+        self.assertEqual(parsed["iva_total"], 644.58)
+        self.assertEqual(parsed["tributos_total"], 122.78)
+        self.assertEqual(parsed["total"], 3836.81)
+        self.assertEqual(parsed["cae"], "71207195310091")
+        self.assertEqual(parsed["fecha_vencimiento_cae"], "2021-05-24")
+        self.assertEqual(parsed["descripcion"], "MESA LUZ CENTRO ESTANT MLBW BOTINERO WENGUE")
+
 
 if __name__ == "__main__":
     unittest.main()

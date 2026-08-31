@@ -288,6 +288,8 @@ def parse_ar_date(value):
 
 def parse_document_date(value):
     value = str(value).strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return value
     month_aliases = {
         "ene": "01",
         "enero": "01",
@@ -1183,6 +1185,13 @@ def first_labeled_money(label_pattern, text, flags=re.IGNORECASE, radius=100):
     fragment = source[label.end() : label.end() + radius]
     match = re.search(r"(?<!\d)(-?[\d.,]+)(?!\d)", fragment)
     return parse_ar_money(match.group(1)) if match else None
+
+
+def last_money_amount(text):
+    amounts = re.findall(r"-?\$?\s*\d{1,3}(?:\.\d{3})*,\d{2}|-?\$?\s*\d+,\d{2}", str(text or ""))
+    if not amounts:
+        return None
+    return parse_money(amounts[-1])
 
 
 def enrich_arca_parser_result(parsed, text):
@@ -2953,6 +2962,95 @@ def parse_osde_debit_note_ocr(text):
     return normalize_invoice_json(parsed)
 
 
+def parse_osde_invoice_ocr(text):
+    upper_text = text.upper()
+    if "OSDE" not in upper_text or "FACTURA" not in upper_text:
+        return None
+
+    numbers = re.search(r"Factura:\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+    if not numbers:
+        return None
+
+    point_of_sale = numbers.group(1).zfill(5)
+    receipt_number = numbers.group(2).zfill(8)[-8:]
+    issue_date = first_match(r"Fecha\s+de\s+emisi\S*n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    provider_cuit = first_match(r"CUIT:\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE) or "30546741253"
+    receiver = re.search(r"\n\s*(CS\s+TECH\s+CONSULTING\s+S\.?A\.?)\s*\n", text, re.IGNORECASE)
+    receiver_cuit = first_match(r"CUIL/?CUIT:?\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
+
+    subtotal = parse_money(first_match(r"Neto\s+Gravado\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    iva_total = parse_money(first_match(r"IVA\s+Inscripto\s+10,?50%\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    tributos_total = parse_money(first_match(r"Percepci\S*n\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    total = parse_money(first_match(r"\bTotal\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    cae = first_match(r"CAE:\s*(\d{14})", text, re.IGNORECASE)
+    due_date = first_match(r"FECHA\s+DE\s+VENCIMIENTO:\s*(\d{1,2}[./-]\d{1,2}[./-]\d{4})", text, re.IGNORECASE)
+    description = first_match(r"Descripci\S*n\s+Importe\s+(.+?)\s+\$\s*[\d.,]+", text, re.IGNORECASE | re.DOTALL)
+    description = clean_arca_description_candidate(description) or "Total valor Plan de Servicio"
+
+    if total is None:
+        return None
+
+    iva = []
+    if iva_total:
+        iva.append({"codigo": 4, "descripcion": "10.5%", "base_imponible": subtotal, "importe": iva_total})
+    tributos = []
+    if tributos_total:
+        tributos.append(
+            {
+                "codigo": 99,
+                "descripcion": "Percepcion",
+                "base_imponible": subtotal,
+                "alicuota": None,
+                "importe": tributos_total,
+            }
+        )
+
+    parsed = {
+        "tipo_comprobante": "Factura A",
+        "codigo_comprobante": 1,
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_document_date(issue_date),
+        "emisor": {
+            "nombre": "OSDE",
+            "cuit": provider_cuit,
+            "doc_tipo": 80,
+            "doc_nro": digits(provider_cuit),
+            "condicion_iva": "IVA Responsable Inscripto",
+        },
+        "receptor": {
+            "nombre": clean_arca_name(receiver.group(1)) if receiver else "CS TECH CONSULTING SA",
+            "cuit": receiver_cuit,
+            "doc_tipo": 80 if receiver_cuit else None,
+            "doc_nro": digits(receiver_cuit),
+            "condicion_iva": "Responsable Inscripto" if receiver_cuit else None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_total,
+        "tributos_total": tributos_total,
+        "impuestos": round_money((iva_total or 0) + (tributos_total or 0)),
+        "total": total,
+        "cae": cae,
+        "fecha_vencimiento_cae": parse_document_date(due_date),
+        "iva": iva,
+        "tributos": tributos,
+        "items": [
+            {
+                "descripcion": description,
+                "cantidad": 1,
+                "precio_unitario": subtotal,
+                "importe": subtotal,
+            }
+        ],
+    }
+    return normalize_invoice_json(parsed)
+
+
 def parse_despegar_arca_ocr(text):
     upper_text = text.upper()
     if "DESPEGAR.COM.AR" not in upper_text or "COMPROBANTE" not in upper_text:
@@ -3197,16 +3295,13 @@ def parse_telecom_fibertel_invoice_ocr(text):
     for line in str(text or "").splitlines():
         if not re.search(r"PERCEP|IIBB|RG2408", line, re.IGNORECASE):
             continue
-        amounts = re.findall(r"-?[\d.,]+", line)
-        if not amounts:
-            continue
-        amount = parse_money(amounts[-1])
+        amount = last_money_amount(line)
         if amount:
             tributos_total = round_money(tributos_total + amount)
             tributos.append(
                 {
                     "codigo": 99,
-                    "descripcion": clean_external_line(line[: line.rfind(amounts[-1])]) or "Percepcion",
+                    "descripcion": clean_external_line(re.sub(r"-?\$?\s*\d{1,3}(?:\.\d{3})*,\d{2}\s*$|-?\$?\s*\d+,\d{2}\s*$", "", line)) or "Percepcion",
                     "base_imponible": subtotal,
                     "alicuota": None,
                     "importe": amount,
@@ -3493,6 +3588,195 @@ def parse_xt_comunicaciones_invoice_ocr(text):
     return normalize_invoice_json(parsed)
 
 
+def parse_cetrogar_invoice_ocr(text):
+    upper_text = text.upper()
+    if "CETROGAR" not in upper_text:
+        return None
+
+    numbers = re.search(r"Nro\.?\s*Factura:\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+    if not numbers:
+        return None
+
+    point_of_sale = numbers.group(1).zfill(5)
+    receipt_number = numbers.group(2).zfill(8)[-8:]
+    issue_date = first_match(r"Fecha\s+de\s+Emisi\S*n:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    provider_cuit = first_match(r"CUIT:\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
+    receiver_name = first_match(r"Vendido a:.*?\n\s*([^\n]+)", text, re.IGNORECASE | re.DOTALL)
+    if receiver_name and re.search(r"\bCS\s+Tech\s+Consulting\s+SA\b", receiver_name, re.IGNORECASE):
+        receiver_name = "CS Tech Consulting SA"
+    receiver_cuit = first_match(r"Documento:\s*(30-?71544453-?0|30715444530)", text, re.IGNORECASE)
+    subtotal = parse_money(first_match(r"Subtotal:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    iva_total = parse_money(first_match(r"\bIVA:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    total = parse_money(first_match(r"\bTotal:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    cae = first_match(r"CAE\s*N\S*:\s*(\d{14})", text, re.IGNORECASE)
+    due_date = first_match(r"Fecha\s+de\s+Vto\.?\s+de\s+CAE:\s*(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+
+    items = []
+    for match in re.finditer(
+        r"(?P<description>.+?)\s+(?P<sku>[A-Z]{1,4}\d{3,})\s+\$(?P<unit>[\d.,]+)\s+"
+        r"(?P<quantity>\d+(?:[,.]\d+)?)\s+\$(?P<internal_tax>[\d.,]+)\s+\$(?P<iva>[\d.,]+)\s+\$(?P<amount>[\d.,]+)",
+        text,
+    ):
+        description = clean_arca_description_candidate(match.group("description"))
+        amount = parse_money(match.group("amount"))
+        if not description or amount is None:
+            continue
+        items.append(
+            {
+                "descripcion": description,
+                "cantidad": parse_quantity(match.group("quantity")),
+                "precio_unitario": parse_money(match.group("unit")),
+                "importe": amount,
+            }
+        )
+
+    if total is None:
+        return None
+
+    iva = []
+    if iva_total:
+        iva.append({"codigo": 5, "descripcion": "21%", "base_imponible": subtotal, "importe": iva_total})
+
+    parsed = {
+        "tipo_comprobante": "Factura A",
+        "codigo_comprobante": 1,
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_document_date(issue_date),
+        "emisor": {
+            "nombre": "CETROGAR S.A",
+            "cuit": provider_cuit,
+            "doc_tipo": 80 if provider_cuit else None,
+            "doc_nro": digits(provider_cuit),
+            "condicion_iva": "IVA Responsable Inscripto",
+        },
+        "receptor": {
+            "nombre": clean_arca_name(receiver_name),
+            "cuit": receiver_cuit,
+            "doc_tipo": 80 if receiver_cuit else None,
+            "doc_nro": digits(receiver_cuit),
+            "condicion_iva": "Responsable Inscripto" if receiver_cuit else None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_total,
+        "tributos_total": 0.0,
+        "impuestos": iva_total,
+        "total": total,
+        "cae": cae,
+        "fecha_vencimiento_cae": parse_document_date(due_date),
+        "iva": iva,
+        "tributos": [],
+        "items": items,
+    }
+    return normalize_invoice_json(parsed)
+
+
+def parse_hidroal_homecenter_invoice_ocr(text):
+    upper_text = text.upper()
+    if "HIDROAL" not in upper_text and "HOME CENTER" not in upper_text and "HOMECENTER" not in upper_text:
+        return None
+
+    numbers = re.search(r"Factura\s+N\S*\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+    if not numbers:
+        return None
+
+    point_of_sale = numbers.group(1).zfill(5)
+    receipt_number = numbers.group(2).zfill(8)[-8:]
+    issue_date = first_match(r"Fecha:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    provider_cuit = first_match(r"CUIT:\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
+    receiver_name = first_match(r"Nombre:\s*([^\n]+)", text, re.IGNORECASE)
+    receiver_cuit = first_match(r"\bCUIT:\s*(30-?71544453-?0|30715444530)", text, re.IGNORECASE)
+    subtotal = parse_money(first_match(r"\bGravado:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    iva_total = parse_money(first_match(r"(?:Importe\s+Iva|IVA):\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    tributos_total = parse_money(first_match(r"Percepci\S*n\s+Buenos\s+Aires\s+[\d.,]+\s*%\s*\$?\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    total = parse_money(first_match(r"\bTotal:\s*\$?\s*([\d.,]+)", text, re.IGNORECASE))
+    cae = first_match(r"CAE:\s*(\d{14})", text, re.IGNORECASE)
+    due_date = first_match(r"Vencimiento:\s*(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2})", text, re.IGNORECASE)
+
+    items = []
+    for line in text.splitlines():
+        item_match = re.match(
+            r"\s*(?P<quantity>\d+(?:[,.]\d+)?)\s+(?P<description>.+?)\s+21,00\s+0,00\s+"
+            r"(?P<unit>[\d.,]+)\s+0,00\s+\$?\s*(?P<amount>[\d.,]+)\s*$",
+            line,
+            re.IGNORECASE,
+        )
+        if not item_match:
+            continue
+        description = clean_arca_description_candidate(item_match.group("description"))
+        if not description:
+            continue
+        items.append(
+            {
+                "descripcion": description,
+                "cantidad": parse_quantity(item_match.group("quantity")),
+                "precio_unitario": parse_money(item_match.group("unit")),
+                "importe": parse_money(item_match.group("amount")),
+            }
+        )
+
+    if total is None:
+        return None
+
+    iva = []
+    if iva_total:
+        iva.append({"codigo": 5, "descripcion": "21%", "base_imponible": subtotal, "importe": iva_total})
+    tributos = []
+    if tributos_total:
+        tributos.append(
+            {
+                "codigo": 99,
+                "descripcion": "Percepción Buenos Aires",
+                "base_imponible": subtotal,
+                "alicuota": 4.0,
+                "importe": tributos_total,
+            }
+        )
+
+    parsed = {
+        "tipo_comprobante": "Factura A",
+        "codigo_comprobante": 1,
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_document_date(issue_date),
+        "emisor": {
+            "nombre": "HIDROAL SA",
+            "cuit": provider_cuit,
+            "doc_tipo": 80 if provider_cuit else None,
+            "doc_nro": digits(provider_cuit),
+            "condicion_iva": "Responsable Inscripto",
+        },
+        "receptor": {
+            "nombre": clean_arca_name(receiver_name),
+            "cuit": receiver_cuit,
+            "doc_tipo": 80 if receiver_cuit else None,
+            "doc_nro": digits(receiver_cuit),
+            "condicion_iva": "Responsable Inscripto" if receiver_cuit else None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_total,
+        "tributos_total": tributos_total,
+        "impuestos": round_money((iva_total or 0) + (tributos_total or 0)),
+        "total": total,
+        "cae": cae,
+        "fecha_vencimiento_cae": parse_document_date(due_date),
+        "iva": iva,
+        "tributos": tributos,
+        "items": items,
+    }
+    return normalize_invoice_json(parsed)
+
+
 def parse_mesa_sofi_invoice_ocr(text):
     upper_text = text.upper()
     if "MESA SOFI" not in upper_text and "DYNA HAYA" not in upper_text:
@@ -3729,9 +4013,21 @@ def parse_structured_arca_ocr(ocr_text):
     if osde_debit_note is not None:
         return osde_debit_note
 
+    osde_invoice = parse_osde_invoice_ocr(text)
+    if osde_invoice is not None:
+        return osde_invoice
+
     xt_invoice = parse_xt_comunicaciones_invoice_ocr(text)
     if xt_invoice is not None:
         return xt_invoice
+
+    cetrogar_invoice = parse_cetrogar_invoice_ocr(text)
+    if cetrogar_invoice is not None:
+        return cetrogar_invoice
+
+    hidroal_homecenter_invoice = parse_hidroal_homecenter_invoice_ocr(text)
+    if hidroal_homecenter_invoice is not None:
+        return hidroal_homecenter_invoice
 
     mesa_sofi_invoice = parse_mesa_sofi_invoice_ocr(text)
     if mesa_sofi_invoice is not None:
