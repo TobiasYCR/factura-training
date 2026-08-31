@@ -565,6 +565,43 @@ Fecha Vto.: 29-01-2020
             "Servicios de televisión, packs premium, internet 100 megas y descuentos correspondientes al período 02-2020.",
         )
 
+    def test_fibertel_ignores_phone_ad_in_concepts_and_completes_buyer(self):
+        text = """Archivo: 03 Marzo - CV 6723-01613211.pdf
+Cablevisión Fibertel
+Telecom Argentina S.A. FACTURA N°: 6723-01613211
+FECHA: 19-03-2021
+A C.U.I.T.:30639453738
+SR./A: TECH CONSULTING SA CS FORMA DE PAGO: Debito Automatico
+PERIODO: 04-2021
+CUIT No: 30-71544453-0
+CONCEPTOS IMPORTE
+Cablevisión Flow Box 04-2021 2.385,12
+Adicional Cablevisión Flow Box 04-2021 235,54
+Servicios de Television Subtotal 2620,66
+Pack Futbol 04-2021 686,78
+Packs Premium Subtotal 686,78
+Fibertel 100 Megas Wifi 04-2021 3.244,63
+Servicios Banda Ancha (SBA) Subtotal 3244,63
+Promo Débito Automático 6M 04-2021 -247,93
+0800 199 7771
+Promoción Combo Mes 3 de 6 6MX47% -2.645,99
+Promocion COMBO Subtotal -2645,99
+Neto Gravado Subtotal 3.658,15
+$4.682,45
+CAE Nro: 71128471020836
+Fecha Vto: 29/03/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["receptor"]["nombre"], "CS TECH CONSULTING SA")
+        self.assertFalse(any(item["descripcion"].startswith("0800") for item in parsed["items"]))
+        self.assertEqual(parsed["total"], 4682.45)
+        self.assertEqual(parsed["iva_porcentaje"], 21.0)
+        self.assertEqual(
+            parsed["descripcion"],
+            "Servicios de televisión, packs premium, internet 100 megas y descuentos correspondientes al período 04-2021.",
+        )
+
     def test_osde_personalized_invoice_is_parsed(self):
         text = """Archivo: 04 Abril - Osde 0082-00118966.pdf
 OSDE
@@ -711,6 +748,32 @@ CAE: 71207195310091 - Vencimiento 24/05/2021
         self.assertEqual(parsed["items"][0]["descripcion"], "MESA LUZ CENTRO ESTANT MLBW BOTINERO WENGUE")
         self.assertEqual(parsed["fecha_vencimiento_cae"], "2021-05-24")
         self.assertEqual(parsed["descripcion"], "MESA LUZ CENTRO ESTANT MLBW BOTINERO WENGUE")
+
+    def test_hidroal_homecenter_invoice_handles_real_tesseract_header(self):
+        text = """Archivo: 05 Mayo - Mesitas 0033-00016521.pdf
+Factura
+D HIDROAL A N° 0033-00016521
+HOMECENTER Fecha: 14/05/2021
+Cod.01
+Razon Social: HIDROAL SA
+Dirección: Venezuela 957, Caba CUIT: 30628724497
+Nombre: CS TECH CONSULTING S.A. IVA: Responsable Inscripto
+Localidad: El Palomar CUIT: 30715444530
+Cantidad Detalle % IVA % Impuesto Pr eco Descuento Importe
+Interno Unitario
+1,00 MESA LUZ CENTRO ESTANT MLBW BOTINERO WENGUE 21,00 0,00 3.069,45 0,00 $ 3.069,45
+Garantía: 6 meses
+Gravado: $ 3.069,45 Exento: $ 0,00
+Importe Iva: $ 644,58 Gravado:  $3.069,45
+Percepción Buenos Aires 4.00% $ 122,78
+Total: $ 3.836,81
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["numero_factura"], "00033-00016521")
+        self.assertEqual(len(parsed["items"]), 1)
+        self.assertEqual(parsed["descripcion"], "MESA LUZ CENTRO ESTANT MLBW BOTINERO WENGUE")
+        self.assertEqual(parsed["fecha_vencimiento_cae"], "2021-05-24")
 
     def test_osde_invoice_keeps_provider_cuit_when_first_cuit_is_buyer(self):
         text = """Archivo: 02 Febrero - Osde 0078-00111613.pdf

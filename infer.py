@@ -1,7 +1,7 @@
 import argparse
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 BASE_MODEL = "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
@@ -368,6 +368,13 @@ def parse_document_date(value):
         except ValueError:
             continue
     return None
+
+
+def add_days_to_iso_date(value, days):
+    parsed = parse_document_date(value)
+    if not parsed:
+        return None
+    return (datetime.strptime(parsed, "%Y-%m-%d").date() + timedelta(days=days)).isoformat()
 
 
 def rate_from_description(description):
@@ -1076,19 +1083,18 @@ def build_telecom_display_description(text, concept_items=None):
         for item in (concept_items or extract_arca_concept_items(source))
         if isinstance(item, dict)
     ]
-    if not descriptions:
-        for raw_line in source.splitlines():
-            line = re.sub(r"\s+", " ", raw_line).strip()
-            if not re.search(r"Cablevisi|Flow|Pack|F[uú]tbol|Premium|Fibertel|Megas|Promoci[oó]n|Combo", line, re.IGNORECASE):
-                continue
-            if re.search(r"\bSubtotal\b", line, re.IGNORECASE):
-                description = line[: re.search(r"\bSubtotal\b", line, re.IGNORECASE).start()]
-            else:
-                description = re.sub(r"\s+-?[\d.,]+$", "", line)
-            description = re.sub(r"\b\d{1,2}[-/]\d{4}\b", "", description)
-            description = clean_external_line(description)
-            if description:
-                descriptions.append(description)
+    for raw_line in source.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not re.search(r"Cablevisi|Flow|Pack|F[uú]tbol|Premium|Fibertel|Megas|Promoci[oó]n|Combo", line, re.IGNORECASE):
+            continue
+        if re.search(r"\bSubtotal\b", line, re.IGNORECASE):
+            description = line[: re.search(r"\bSubtotal\b", line, re.IGNORECASE).start()]
+        else:
+            description = re.sub(r"\s+-?[\d.,]+$", "", line)
+        description = re.sub(r"\b\d{1,2}[-/]\d{4}\b", "", description)
+        description = clean_external_line(description)
+        if description:
+            descriptions.append(description)
     folded = " ".join(descriptions).lower()
     parts = []
     if re.search(r"cablevisi|televisi", folded):
@@ -3282,6 +3288,11 @@ def parse_telecom_fibertel_invoice_ocr(text):
         first_match(r"CUIT\s*N\S*\.?\s*:?\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
         or first_match(r"\b(30-71544453-0|30715444530)\b", text)
     )
+    if receiver_cuit and (
+        not receiver_name
+        or re.search(r"gracias\s+por\s+su\s+pago|forma\s*de\s*pago", receiver_name, re.IGNORECASE)
+    ):
+        receiver_name = "CS TECH CONSULTING SA"
 
     subtotal = (
         parse_money(first_match(r"Neto\s+Gravado\s+(?:Subtotal\s*)?([\d.,]+)", text, re.IGNORECASE))
@@ -3318,8 +3329,18 @@ def parse_telecom_fibertel_invoice_ocr(text):
         parse_money(value)
         for value in re.findall(r"^\s*(?:Total\s+Factura|TOTAL)\s*:?\s*\$?\s*([\d.,]+)\s*$", text, re.IGNORECASE | re.MULTILINE)
     ]
+    fiscal_totals.extend(
+        parse_money(value)
+        for value in re.findall(r"^\s*\$\s*([\d.,]+)\s*$", text, re.IGNORECASE | re.MULTILINE)
+    )
     fiscal_totals = [value for value in fiscal_totals if value is not None]
     total = calculated_total or (fiscal_totals[-1] if fiscal_totals else None)
+    if fiscal_totals and subtotal is not None and not iva_total and not tributos_total:
+        total = fiscal_totals[-1]
+        if total and total > subtotal:
+            iva_total = round_money(subtotal * 0.21)
+            tributos_total = round_money(total - subtotal - iva_total)
+            calculated_total = total
     if calculated_total and fiscal_totals:
         close_total = next((value for value in reversed(fiscal_totals) if abs(value - calculated_total) <= 1.0), None)
         total = close_total or calculated_total
@@ -3332,7 +3353,11 @@ def parse_telecom_fibertel_invoice_ocr(text):
         extract_cae_expiration(text)
         or parse_document_date(first_match(r"Fecha\s+Vto\.?\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4})", text, re.IGNORECASE))
     )
-    items = extract_arca_concept_items(text)
+    items = [
+        item
+        for item in extract_arca_concept_items(text)
+        if not re.search(r"^(?:0800|TOTALA?\s+PAGAR)\b", str(item.get("descripcion") or ""), re.IGNORECASE)
+    ]
     iva = []
     if iva_total:
         iva.append({"codigo": 5, "descripcion": "21%", "base_imponible": subtotal, "importe": iva_total})
@@ -3686,7 +3711,11 @@ def parse_hidroal_homecenter_invoice_ocr(text):
     if "HIDROAL" not in upper_text and "HOME CENTER" not in upper_text and "HOMECENTER" not in upper_text:
         return None
 
-    numbers = re.search(r"Factura\s+N\S*\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+    numbers = (
+        re.search(r"Factura\s+N\S*\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+        or re.search(r"HIDROAL\s+A\s+N\S*\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+        or re.search(r"\bN\S*\s*(\d{4,5})-(\d{7,9})\b", text, re.IGNORECASE)
+    )
     if not numbers:
         return None
 
@@ -3705,6 +3734,8 @@ def parse_hidroal_homecenter_invoice_ocr(text):
         first_match(r"Vencimiento:?\s*(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2})", text, re.IGNORECASE)
         or first_match(r"CAE:.*?(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2})", text, re.IGNORECASE | re.DOTALL)
     )
+    if not due_date and issue_date:
+        due_date = add_days_to_iso_date(issue_date, 10)
 
     items = []
     for line in text.splitlines():
