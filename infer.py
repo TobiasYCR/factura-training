@@ -48,7 +48,7 @@ REQUIRED_KEYS = {
     "tributos",
     "items",
 }
-OPTIONAL_KEYS = {"numero_factura_completo", "iva_porcentaje", "descripcion"}
+OPTIONAL_KEYS = {"numero_factura_completo", "iva_porcentaje", "descripcion", "fecha_vencimiento", "fecha_vencimiento_pago"}
 PERSON_KEYS = {"nombre", "doc_tipo", "doc_nro", "cuit", "condicion_iva"}
 IVA_CODE_BY_RATE = {10.5: 4, 21.0: 5, 27.0: 6}
 ARCA_CODE_BY_LETTER = {"A": 1, "B": 6, "C": 11}
@@ -530,6 +530,23 @@ def extract_cae_expiration(text):
     return None
 
 
+def extract_payment_due_date(text):
+    label = re.compile(
+        r"(?:FECHA\s+DE\s+VTO\.?\s+PARA\s+EL\s+PAGO|FECHA\s+DE\s+VENCIMIENTO\s+PARA\s+EL\s+PAGO|"
+        r"VENCIMIENTO\s+DEL\s+PAGO|VTO\.?\s+PAGO|VENCIMIENTO\s+PAGO)",
+        re.IGNORECASE,
+    )
+    source = str(text or "")
+    for match in label.finditer(source):
+        fragment = source[match.end() : match.end() + 140]
+        date_match = re.search(r"\b(\d{1,2}[./-]\d{1,2}[./-]\d{2,4})\b", fragment)
+        if date_match:
+            normalized = parse_document_date(date_match.group(1))
+            if normalized:
+                return normalized
+    return None
+
+
 def deduplicate_document_copies(text):
     """Use only the ORIGINAL block and discard every later copy completely."""
     text = str(text or "")
@@ -549,6 +566,7 @@ def clean_arca_name(value):
         return None
     value = re.sub(r"^[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+", "", str(value))
     value = re.sub(r"\s+", " ", value).strip(" :;-|")
+    value = re.sub(r"\b([A-ZÁÉÍÓÚÜÑ])\s+([A-ZÁÉÍÓÚÜÑ]{3,})\b", r"\1\2", value)
     return value or None
 
 
@@ -1223,6 +1241,10 @@ def enrich_arca_parser_result(parsed, text):
         normalized["cae"] = extract_cae(normalized_text)
     if not normalized.get("fecha_vencimiento_cae"):
         normalized["fecha_vencimiento_cae"] = extract_cae_expiration(normalized_text)
+    payment_due_date = normalized.get("fecha_vencimiento_pago") or extract_payment_due_date(normalized_text)
+    if payment_due_date:
+        normalized["fecha_vencimiento_pago"] = payment_due_date
+        normalized["fecha_vencimiento"] = normalized.get("fecha_vencimiento") or payment_due_date
 
     code = extract_arca_document_code(normalized_text)
     if code in {1, 6, 11}:
@@ -4330,6 +4352,7 @@ def normalize_invoice_json(parsed):
         if cuit_digits and len(cuit_digits) == 11:
             person["cuit"] = format_cuit(cuit_digits)
             person["doc_nro"] = cuit_digits
+        person["nombre"] = clean_arca_name(person.get("nombre"))
         normalized[person_key] = person
 
     items = normalized.get("items")
@@ -4629,7 +4652,7 @@ def validate_invoice_json(parsed):
         if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in iva_values):
             errors.append("iva_porcentaje deberia ser numero, array numerico o null.")
 
-    for date_key in ("fecha_emision", "fecha_vencimiento_cae"):
+    for date_key in ("fecha_emision", "fecha_vencimiento", "fecha_vencimiento_pago", "fecha_vencimiento_cae"):
         value = parsed.get(date_key)
         if value is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(value)):
             errors.append(f"{date_key} deberia tener formato YYYY-MM-DD.")

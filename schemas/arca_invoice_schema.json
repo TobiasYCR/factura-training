@@ -52,6 +52,10 @@
       "type": ["string", "null"],
       "format": "date"
     },
+    "fecha_vencimiento": {
+      "type": ["string", "null"],
+      "format": "date"
+    },
     "emisor": { "$ref": "#/$defs/persona" },
     "receptor": { "$ref": "#/$defs/persona" },
     "moneda": {
@@ -72,6 +76,10 @@
       "pattern": "^\\d{14}$"
     },
     "fecha_vencimiento_cae": {
+      "type": ["string", "null"],
+      "format": "date"
+    },
+    "fecha_vencimiento_pago": {
       "type": ["string", "null"],
       "format": "date"
     },

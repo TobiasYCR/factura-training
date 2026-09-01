@@ -50,6 +50,37 @@ class ArcaParserRegressionTests(unittest.TestCase):
         self.assertEqual(parsed["numero_factura_completo"], "27959140850_011_00001_00000003")
         self.assertEqual(validate_extracted_document_json(parsed), [])
 
+    def test_payment_due_date_is_separate_from_cae_due_date_and_name_is_cleaned(self):
+        text = """ORIGINAL
+C
+FACTURA
+GONZALEZ THIAGO J AVIER
+COD. 011
+Punto de Venta: 00001 Comp. Nro: 00000013
+Razón Social: GONZALEZ THIAGO J AVIER Fecha de Emisión: 01/09/2026
+Domicilio Comercial: Miranda 343 - Monte Grande, Buenos Aires CUIT: 20468137985
+Ingresos Brutos: 20468137985
+Condición frente al IVA: Responsable Monotributo Fecha de Inicio de Actividades: 01/10/2025
+Período Facturado Desde: 03/08/2026 Hasta:31/08/2026 Fecha de Vto. para el pago:15/09/2026
+CUIT: 30715444530 Apellido y Nombre / Razón Social:CS TECH CONSULTING S.A.
+Condición frente al IVA: IVA Responsable Inscripto Domicilio:Maestra Rocha Montarce 1150 - El Palomar, Buenos Aires
+Condición de venta: Transferencia Bancaria
+Código Producto / Servicio Cantidad U. Medida Precio Unit. % Bonif Imp. Bonif. Subtotal
+01 Servicios consultorias - agosto 180,00 unidades 6000,00 0,00 0,00 1080000,00
+Subtotal: $ 1080000,00
+Importe Otros Tributos: $ 0,00
+Importe Total: $ 1080000,00
+Pág. 1/1 CAE Nº: 86350888636910
+Fecha de Vto. de CAE: 11/09/2026
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["emisor"]["nombre"], "GONZALEZ THIAGO JAVIER")
+        self.assertEqual(parsed["fecha_vencimiento_pago"], "2026-09-15")
+        self.assertEqual(parsed["fecha_vencimiento"], "2026-09-15")
+        self.assertEqual(parsed["fecha_vencimiento_cae"], "2026-09-11")
+        self.assertEqual(validate_extracted_document_json(parsed), [])
+
     def test_visual_factura_c_letter_overrides_default_a(self):
         text = """Archivo: sample.pdf
 ORIGINAL
