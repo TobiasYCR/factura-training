@@ -476,6 +476,29 @@ Saldo adeudado (ARS) $ 0,00
         self.assertIn("deeptics.com.ar", parsed["items"][0]["description"])
         self.assertIn("deeptics.com.ar", build_display_description(parsed))
 
+    def test_godaddy_removes_ocr_noise_before_product_name(self):
+        text = """Archivo: 04 Abril - GoDaddy 1849643623.pdf
+Recibo
+N° 1849643623
+FECHA:
+05/04/2021
+NÚMERO DE CLIENTE: 203521924
+FACTURAR A:
+Javier Nogues
+CS TECH CONSULTING
+PAGO:
+Visa terminada en 7953 $ 4.799,88
+Plazo Producto Cantidad
+laño Correo Plus de Microsoft 365 de GoDaddy $ 4.799,88
+Total (ARS) $ 4.799,88
+Pago recibido $ 4.799,88
+Saldo adeudado (ARS) $ 0,00
+"""
+        parsed = parse_supported_document_ocr(text)
+
+        self.assertEqual(parsed["items"][0]["description"], "Correo Plus de Microsoft 365 de GoDaddy")
+        self.assertEqual(build_display_description(parsed), "Correo Plus de Microsoft 365 de GoDaddy")
+
     def test_compact_industrial_usd_invoice_is_parsed(self):
         text = """ORIGINAL
 FECHADEEMISIÓN:22.12.2025

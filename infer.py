@@ -1461,6 +1461,19 @@ def clean_godaddy_provider_lines(provider_address):
     return lines
 
 
+def clean_godaddy_item_description(description):
+    value = clean_external_line(description)
+    if not value:
+        return value
+    value = re.sub(
+        r"^(?:l[aã]no|larlo|laño|1\s*a[nñ]o|1\s*a[fi]o|a[nñ]o)\s+(?=(?:Correo|Microsoft|Linux|Dominio|Domain|SSL|Hosting)\b)",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return clean_external_line(value)
+
+
 def godaddy_support_phone(text, spanish_receipt=False):
     phone = first_match(r"ASISTENCIA\s+TECNICA:\s*([0-9() .+-]+)", text, re.IGNORECASE)
     if phone:
@@ -4428,7 +4441,8 @@ def normalize_external_document(parsed):
             normalized[party_key]["tax_id"] = digits(tax_id)
 
     provider_name = str(normalized["provider"].get("name") or normalized["provider"].get("business_name") or "")
-    if "godaddy" in provider_name.lower():
+    is_godaddy = "godaddy" in provider_name.lower()
+    if is_godaddy:
         provider_phone = normalized["provider"].get("phone")
         if provider_phone and re.search(r"\(?480\)?\s*[- .]?463\s*[- .]?8300", provider_phone):
             normalized["provider"]["phone"] = None
@@ -4449,7 +4463,10 @@ def normalize_external_document(parsed):
         for item in items:
             if not isinstance(item, dict):
                 continue
-            fixed_items.append({key: item.get(key) for key in EXTERNAL_ITEM_KEYS})
+            fixed_item = {key: item.get(key) for key in EXTERNAL_ITEM_KEYS}
+            if is_godaddy:
+                fixed_item["description"] = clean_godaddy_item_description(fixed_item.get("description"))
+            fixed_items.append(fixed_item)
     normalized["items"] = fixed_items
 
     for key in ("subtotal", "taxes", "fees", "total", "paid", "balance_due"):
