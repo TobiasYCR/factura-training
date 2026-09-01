@@ -81,6 +81,30 @@ Fecha de Vto. de CAE: 11/09/2026
         self.assertEqual(parsed["fecha_vencimiento_cae"], "2026-09-11")
         self.assertEqual(validate_extracted_document_json(parsed), [])
 
+    def test_monthly_consulting_description_recovers_service_prefix_and_year(self):
+        text = """ORIGINAL
+C
+FACTURA
+MARI DALINA ADRIANA
+COD. 011
+Punto de Venta: 00001 Comp. Nro: 00000059
+Razón Social: MARI DALINA ADRIANA Fecha de Emisión: 30/04/2021
+Domicilio Comercial: San Luis 3251 Piso:7 Dpto:A - Ciudad de CUIT: 27264933671
+Condición frente al IVA: Responsable Monotributo Fecha de Inicio de Actividades: 01/10/2016
+Período Facturado Desde: 01/04/2021 Hasta:30/04/2021 Fecha de Vto. para el pago:06/05/2021
+CUIT: 30715444530 Apellido y Nombre / Razón Social:CS TECH CONSULTING S.A.
+Códígo Producto / Servicio Cantidad U. Medida Precio Unit. % Bonif Imp. Bonif. Subtotal
+1 consultoría Abril 1,00 unidades 27000,00 0,00 0,00 27000,00
+Subtotal: $ 27000,00
+Importe Total: $ 27000,00
+CAE N°: 71181484605002
+Fecha de Vto. de CAE: 10/05/2021
+"""
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["items"][0]["descripcion"], "Servicios de consultoría Abril 2021")
+        self.assertEqual(parsed["descripcion"], "Servicios de consultoría Abril 2021")
+
     def test_visual_factura_c_letter_overrides_default_a(self):
         text = """Archivo: sample.pdf
 ORIGINAL

@@ -370,6 +370,22 @@ def parse_document_date(value):
     return None
 
 
+SPANISH_MONTH_NAMES = (
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+)
+
+
 def add_days_to_iso_date(value, days):
     parsed = parse_document_date(value)
     if not parsed:
@@ -738,6 +754,35 @@ def clean_arca_description_candidate(value):
     if re.match(r"^(?:SUBTOTAL|IMPORTE\s+TOTAL|CAE|FECHA\s+DE\s+VTO|COMPROBANTE\s+AUTORIZADO)\b", upper):
         return None
     return value
+
+
+def complete_monthly_consulting_description(description, source_text=None, issue_date=None):
+    value = clean_arca_description_candidate(description)
+    if not value:
+        return value
+    month_pattern = "|".join(SPANISH_MONTH_NAMES)
+    match = re.fullmatch(
+        rf"(?:(servicios?\s+de\s+)?consultor(?:ia|ía))\s+({month_pattern})(?:\s+(\d{{4}}))?",
+        value,
+        re.IGNORECASE,
+    )
+    if not match:
+        return value
+
+    month = match.group(2).capitalize()
+    year = match.group(3)
+    parsed_issue_date = parse_document_date(issue_date) if issue_date else None
+    if not year and parsed_issue_date:
+        year = parsed_issue_date[:4]
+    if not year and source_text:
+        source_year = first_match(
+            r"Fecha\s+de\s+Emisi\S*n\s*:?\s*\d{1,2}[/-]\d{1,2}[/-](\d{4})",
+            source_text,
+            re.IGNORECASE,
+        )
+        year = source_year
+    suffix = f" {year}" if year else ""
+    return f"Servicios de consultoría {month}{suffix}"
 
 
 def extract_arca_display_descriptions(text):
@@ -1245,6 +1290,26 @@ def enrich_arca_parser_result(parsed, text):
     if payment_due_date:
         normalized["fecha_vencimiento_pago"] = payment_due_date
         normalized["fecha_vencimiento"] = normalized.get("fecha_vencimiento") or payment_due_date
+
+    issue_date = normalized.get("fecha_emision")
+    if isinstance(normalized.get("items"), list):
+        fixed_items = []
+        for item in normalized["items"]:
+            if isinstance(item, dict):
+                item = dict(item)
+                item["descripcion"] = complete_monthly_consulting_description(
+                    item.get("descripcion"),
+                    normalized_text,
+                    issue_date,
+                )
+            fixed_items.append(item)
+        normalized["items"] = fixed_items
+    if normalized.get("descripcion"):
+        normalized["descripcion"] = complete_monthly_consulting_description(
+            normalized.get("descripcion"),
+            normalized_text,
+            issue_date,
+        )
 
     code = extract_arca_document_code(normalized_text)
     if code in {1, 6, 11}:
