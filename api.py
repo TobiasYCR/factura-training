@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 from infer import (
     BASE_MODEL,
     LORA_MODEL,
+    assess_document_quality,
     build_arca_invoice_identifier,
     build_display_description,
     clean_arca_description_candidate,
@@ -133,17 +134,20 @@ def add_arca_integration_fields(data, source_text=None):
     return enriched
 
 
-def calculate_confidence(parsed, errors, source, used_model):
+def calculate_confidence(parsed, errors, source, used_model, warnings=None):
     if errors:
         return 0.0
     if not isinstance(parsed, dict):
         return 0.0
     completeness = document_completeness(parsed)
     if source == "parser":
-        return round(0.55 + (0.43 * completeness), 4)
-    if used_model:
-        return round(0.50 + (0.32 * completeness), 4)
-    return round(0.35 + (0.25 * completeness), 4)
+        base = 0.55 + (0.43 * completeness)
+    elif used_model:
+        base = 0.50 + (0.32 * completeness)
+    else:
+        base = 0.35 + (0.25 * completeness)
+    warning_penalty = min(0.25, 0.04 * len(warnings or []))
+    return round(max(0.0, base - warning_penalty), 4)
 
 
 def append_log(event):
@@ -299,38 +303,47 @@ def extract_document(
     extraction_source = "parser" if parsed is not None else None
     model_name = None
     initial_errors = validate_extracted_document_json(parsed) if parsed is not None else []
-    initial_confidence = calculate_confidence(parsed, initial_errors, extraction_source, False)
+    initial_warnings = assess_document_quality(parsed, parser_text) if parsed is not None else []
+    initial_confidence = calculate_confidence(parsed, initial_errors, extraction_source, False, initial_warnings)
 
     if should_run_model(parsed, initial_errors, use_model, model_policy, initial_confidence, min_confidence):
         parser_parsed = parsed
         parser_source = extraction_source
         parser_errors = initial_errors
         parser_confidence = initial_confidence
+        parser_warnings = initial_warnings
         model_name, (model, tokenizer) = get_model(model_choice)
         raw_model_response = generate_with_loaded_model(model, tokenizer, ocr_text, max_new_tokens)
         model_parsed, _ = extract_json(raw_model_response)
         parsed = finalize_invoice_json(model_parsed, parser_text)
         extraction_source = "model"
         model_errors = validate_extracted_document_json(parsed)
-        model_confidence = calculate_confidence(parsed, model_errors, extraction_source, True)
+        model_warnings = assess_document_quality(parsed, parser_text)
+        model_confidence = calculate_confidence(parsed, model_errors, extraction_source, True, model_warnings)
         if parser_parsed is not None and not parser_errors and parser_confidence >= model_confidence:
             parsed = parser_parsed
             extraction_source = parser_source
+            initial_warnings = parser_warnings
             raw_model_response = None
+        else:
+            initial_warnings = model_warnings
 
     if parsed is None:
         parsed = finalize_invoice_json(None, parser_text)
 
     errors = validate_extracted_document_json(parsed)
+    data = add_arca_integration_fields(parsed, parser_text)
+    warnings = assess_document_quality(data, parser_text)
     used_model = extraction_source == "model"
     return {
         "ok": not errors,
         "source": extraction_source,
         "model": model_name,
-        "confidence": calculate_confidence(parsed, errors, extraction_source, used_model),
+        "confidence": calculate_confidence(data, errors, extraction_source, used_model, warnings),
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
         "errors": errors,
-        "data": add_arca_integration_fields(parsed, parser_text),
+        "warnings": warnings,
+        "data": data,
         "raw_model_response": raw_model_response,
     }
 
@@ -420,6 +433,14 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                 else request["ocr_text"]
             )
             result["data"] = add_arca_integration_fields(result["data"], parser_text)
+            result["warnings"] = assess_document_quality(result["data"], parser_text)
+            result["confidence"] = calculate_confidence(
+                result["data"],
+                result["errors"],
+                result["source"],
+                result["source"] == "model",
+                result["warnings"],
+            )
             result["input"] = {
                 "filename": request["filename"],
                 "text_extractor": request["text_extractor"],
@@ -438,6 +459,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                     "confidence": result["confidence"],
                     "elapsed_ms": result["elapsed_ms"],
                     "errors": result["errors"],
+                    "warnings": result["warnings"],
                     "input": result["input"],
                     "document_type": result["data"].get("document_type") if isinstance(result["data"], dict) else None,
                     "tipo_comprobante": result["data"].get("tipo_comprobante") if isinstance(result["data"], dict) else None,

@@ -2,6 +2,7 @@ import unittest
 
 from api import add_arca_integration_fields
 from infer import (
+    assess_document_quality,
     build_display_description,
     extract_arca_concept_items,
     parse_supported_document_ocr,
@@ -49,6 +50,30 @@ class ArcaParserRegressionTests(unittest.TestCase):
         self.assertEqual(parsed["items"][0]["descripcion"], "Consultoria de procesos")
         self.assertEqual(parsed["numero_factura_completo"], "27959140850_011_00001_00000003")
         self.assertEqual(validate_extracted_document_json(parsed), [])
+
+    def test_factura_b_extracts_code_number_and_total_without_iva_warning(self):
+        text = arca_text(
+            "B",
+            6,
+            "30715999999",
+            "00003",
+            "00000042",
+            "71111111111111",
+            "30/04/2021",
+            "Servicio mensual de prueba",
+            1210.0,
+        )
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+
+        self.assertEqual(parsed["tipo_comprobante"], "Factura B")
+        self.assertEqual(parsed["codigo_comprobante"], 6)
+        self.assertEqual(parsed["numero_factura"], "00003-00000042")
+        self.assertEqual(parsed["total"], 1210.0)
+        self.assertEqual(parsed["iva_total"], 0.0)
+        self.assertEqual(parsed["iva_porcentaje"], 0)
+        self.assertEqual(parsed["descripcion"], "Servicio mensual de prueba")
+        self.assertEqual(validate_extracted_document_json(parsed), [])
+        self.assertNotIn("Factura A sin IVA discriminado.", assess_document_quality(parsed, text))
 
     def test_payment_due_date_is_separate_from_cae_due_date_and_name_is_cleaned(self):
         text = """ORIGINAL
@@ -936,6 +961,88 @@ FECHA DE VENCIMIENTO: 06.03.2021
 
         self.assertEqual(parsed["emisor"]["cuit"], "30-54674125-3")
         self.assertEqual(parsed["receptor"]["cuit"], "30-71544453-0")
+
+    def test_quality_warnings_detect_inconsistent_totals(self):
+        text = arca_text(
+            "A",
+            1,
+            "30715999999",
+            "00003",
+            "00000043",
+            "71111111111112",
+            "30/04/2021",
+            "Servicio mensual de prueba",
+            1210.0,
+            "IVA 21%: $ 210,00",
+        )
+        parsed = add_arca_integration_fields(parse_supported_document_ocr(text), text)
+        parsed["iva_total"] = 210.0
+        parsed["impuestos"] = 210.0
+
+        warnings = assess_document_quality(parsed, text)
+
+        self.assertIn("Importes inconsistentes: subtotal + IVA + tributos no coincide con total.", warnings)
+
+    def test_external_quality_accepts_zero_balance(self):
+        parsed = {
+            "document_type": "external_provider_receipt",
+            "provider": {
+                "name": "GoDaddy.com, LLC",
+                "business_name": "GoDaddy.com, LLC",
+                "tax_id": None,
+                "vat_number": None,
+                "address": None,
+                "country": "United States",
+                "phone": None,
+            },
+            "buyer": {
+                "name": "Javier Nogues",
+                "business_name": "CS TECH CONSULTING",
+                "tax_id": "30715444530",
+                "vat_number": None,
+                "address": None,
+                "country": "Argentina",
+                "phone": None,
+            },
+            "document": {
+                "title": "Recibo",
+                "number": "1848619872",
+                "date": "2021-04-03",
+                "account_number": None,
+                "customer_number": "203521924",
+                "status": "paid",
+            },
+            "currency": "ARS",
+            "subtotal": 399.99,
+            "taxes": 0.0,
+            "fees": 0.0,
+            "total": 399.99,
+            "paid": 399.99,
+            "balance_due": 0.0,
+            "payment": {
+                "method": "card",
+                "card_brand": "Visa",
+                "card_last4": "7953",
+                "amount": 399.99,
+            },
+            "items": [
+                {
+                    "description": "Correo Plus de Microsoft 365 de GoDaddy",
+                    "quantity": 1,
+                    "unit_price": 399.99,
+                    "amount": 399.99,
+                    "term": "1 mes",
+                    "reference": None,
+                }
+            ],
+            "notes": None,
+            "descripcion": "Correo Plus de Microsoft 365 de GoDaddy",
+        }
+
+        warnings = assess_document_quality(parsed)
+
+        self.assertNotIn("Recibo externo con pagado, saldo y total inconsistentes.", warnings)
+        self.assertNotIn("Recibo externo sin total numerico.", warnings)
 
 
 if __name__ == "__main__":

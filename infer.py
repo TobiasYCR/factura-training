@@ -53,6 +53,7 @@ PERSON_KEYS = {"nombre", "doc_tipo", "doc_nro", "cuit", "condicion_iva"}
 IVA_CODE_BY_RATE = {10.5: 4, 21.0: 5, 27.0: 6}
 ARCA_CODE_BY_LETTER = {"A": 1, "B": 6, "C": 11}
 ARCA_LETTER_BY_CODE = {value: key for key, value in ARCA_CODE_BY_LETTER.items()}
+MONEY_TOLERANCE = 1.0
 EXTERNAL_DOCUMENT_KEYS = (
     "document_type",
     "provider",
@@ -240,6 +241,12 @@ def format_cuit(value):
 
 def as_number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def money_close(left, right, tolerance=MONEY_TOLERANCE):
+    if left is None or right is None:
+        return True
+    return abs(round_money(left) - round_money(right)) <= tolerance
 
 
 def round_money(value):
@@ -4666,6 +4673,131 @@ def validate_extracted_document_json(parsed):
     }:
         return validate_external_document_json(parsed)
     return validate_invoice_json(parsed)
+
+
+def invoice_letter(parsed):
+    if not isinstance(parsed, dict) or parsed.get("document_type"):
+        return None
+    code = parsed.get("codigo_comprobante")
+    if isinstance(code, int) and code in ARCA_LETTER_BY_CODE:
+        return ARCA_LETTER_BY_CODE[code]
+    code_digits = digits(code)
+    if code_digits:
+        numeric_code = int(code_digits)
+        if numeric_code in ARCA_LETTER_BY_CODE:
+            return ARCA_LETTER_BY_CODE[numeric_code]
+    match = re.search(r"\bFactura\s+([ABC])\b", str(parsed.get("tipo_comprobante") or ""), re.IGNORECASE)
+    return match.group(1).upper() if match else None
+
+
+def has_suspicious_short_description(description):
+    text = re.sub(r"\s+", " ", str(description or "")).strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in {"servicio", "servicios", "consultoria", "consultoría", "abril", "mayo"}:
+        return True
+    if len(text) < 8:
+        return True
+    return False
+
+
+def assess_external_document_quality(parsed):
+    warnings = []
+    if not isinstance(parsed, dict):
+        return ["No se pudo evaluar calidad: documento externo invalido."]
+
+    provider = parsed.get("provider") if isinstance(parsed.get("provider"), dict) else {}
+    document = parsed.get("document") if isinstance(parsed.get("document"), dict) else {}
+    if not provider.get("name") and not provider.get("business_name"):
+        warnings.append("Proveedor externo sin nombre.")
+    if not document.get("number"):
+        warnings.append("Recibo externo sin numero.")
+    if not document.get("date"):
+        warnings.append("Recibo externo sin fecha.")
+    if as_number(parsed.get("total")) is None:
+        warnings.append("Recibo externo sin total numerico.")
+
+    subtotal = as_number(parsed.get("subtotal"))
+    taxes = as_number(parsed.get("taxes")) or 0.0
+    fees = as_number(parsed.get("fees")) or 0.0
+    total = as_number(parsed.get("total"))
+    if subtotal is not None and total is not None and not money_close(subtotal + taxes + fees, total):
+        warnings.append("Recibo externo con subtotal, impuestos y total inconsistentes.")
+
+    paid = as_number(parsed.get("paid"))
+    balance_due = as_number(parsed.get("balance_due"))
+    if paid is not None and balance_due is not None and total is not None and not money_close(paid + balance_due, total):
+        warnings.append("Recibo externo con pagado, saldo y total inconsistentes.")
+
+    items = parsed.get("items") if isinstance(parsed.get("items"), list) else []
+    if not items:
+        warnings.append("Recibo externo sin items.")
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        if has_suspicious_short_description(item.get("description")):
+            warnings.append(f"Item externo {index} con descripcion débil.")
+    return warnings
+
+
+def assess_invoice_quality(parsed, source_text=None):
+    warnings = []
+    if not isinstance(parsed, dict):
+        return ["No se pudo evaluar calidad: factura invalida."]
+
+    letter = invoice_letter(parsed)
+    code_digits = digits(parsed.get("codigo_comprobante"))
+    if letter == "B" and code_digits and int(code_digits) != 6:
+        warnings.append("Factura B con codigo de comprobante inesperado.")
+    if letter in {"A", "C"} and as_number(parsed.get("total")) is None:
+        warnings.append("Factura ARCA sin total numerico.")
+    if letter == "A" and as_number(parsed.get("iva_total")) in {None, 0.0}:
+        warnings.append("Factura A sin IVA discriminado.")
+
+    subtotal = as_number(parsed.get("subtotal"))
+    not_taxed = as_number(parsed.get("importe_no_gravado")) or 0.0
+    exempt = as_number(parsed.get("importe_exento")) or 0.0
+    iva_total = as_number(parsed.get("iva_total")) or 0.0
+    tributos_total = as_number(parsed.get("tributos_total")) or 0.0
+    total = as_number(parsed.get("total"))
+    if subtotal is not None and total is not None:
+        expected_total = subtotal + not_taxed + exempt + iva_total + tributos_total
+        if not money_close(expected_total, total):
+            warnings.append("Importes inconsistentes: subtotal + IVA + tributos no coincide con total.")
+
+    taxes = as_number(parsed.get("impuestos"))
+    if taxes is not None and not money_close(taxes, iva_total + tributos_total):
+        warnings.append("Impuestos inconsistentes: IVA + tributos no coincide con impuestos.")
+
+    if not parsed.get("cae"):
+        warnings.append("Factura ARCA sin CAE.")
+    if not parsed.get("fecha_vencimiento_cae"):
+        warnings.append("Factura ARCA sin vencimiento de CAE.")
+
+    description = parsed.get("descripcion")
+    if not description:
+        description = build_display_description(parsed, source_text)
+    if has_suspicious_short_description(description):
+        warnings.append("Descripcion débil o ausente.")
+
+    items = parsed.get("items")
+    if isinstance(items, list):
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            if has_suspicious_short_description(item.get("descripcion")):
+                warnings.append(f"Item {index} con descripcion débil.")
+    return warnings
+
+
+def assess_document_quality(parsed, source_text=None):
+    if isinstance(parsed, dict) and parsed.get("document_type") in {
+        "external_provider_receipt",
+        "external_provider_invoice",
+    }:
+        return assess_external_document_quality(parsed)
+    return assess_invoice_quality(parsed, source_text)
 
 
 def validate_invoice_json(parsed):
