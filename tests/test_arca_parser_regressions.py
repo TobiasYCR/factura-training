@@ -128,6 +128,80 @@ Vto. CAE: 19/11/2026
             "Consultoria operativa y Capacitacion",
         )
 
+    def test_mipyme_fce_extracts_payment_due_date_and_vat_totals(self):
+        text = """FACTURA DE CRÉDITO ELECTRÓNICA MiPyMEs (FCE)
+A CÓD. 201
+Punto de Venta: 00002 Comp. Nro: 00000192
+Fecha de Emisión: 14/01/2026
+Razón Social: CS TECH CONSULTING S.A.
+Domicilio Comercial: Maestra Rocha Montarce 1150 - El Palomar, Buenos Aires
+CUIT: 30715444530
+Ingresos Brutos: 902-3071544530
+Fecha de Inicio de Actividades: 01/11/2016
+Condición frente al IVA: IVA Responsable Inscripto
+Fecha de Vto. para el pago: 28/01/2026 Período Facturado Desde: 01/12/2025 Hasta: 31/12/2025
+CBU del Emisor: 0150523802000105524151 Alias CBU: CS-DEEPTICS-ARS
+CUIT: 33699685459 Apellido y Nombre / Razón Social: CORREO ANDREANI SA
+Condición frente al IVA: IVA Responsable Inscripto Domicilio Comercial: Vieytes 1228 - Capital Federal, Ciudad de Buenos Aires
+Opción de Transferencia: Agente de Depósito Colectivo
+Código Producto / Servicio Cantidad U. medida Precio Unit. % Bonif Subtotal Alícuota IVA Subtotal c/IVA
+01 Analista de procesos Sr. - Dic 2025 160,00 unidades 33275,00 0,00 5324000,00 21% 6442040,00
+Importe Otros Tributos: $ 0,00
+Importe Neto Gravado: $ 5324000,00
+IVA 27%: $ 0,00
+IVA 21%: $ 1118040,00
+IVA 10.5%: $ 0,00
+IVA 5%: $ 0,00
+IVA 2.5%: $ 0,00
+IVA 0%: $ 0,00
+Importe Otros Tributos: $ 0,00
+Importe Total: $ 6442040,00
+CAE Nro: 76012345678901
+Fecha de Vto. de CAE: 24/01/2026
+"""
+
+        result = extract_document(text, filename="mipyme-fce.jpg")
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["requires_review"])
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["data"]["tipo_comprobante"], "Factura A")
+        self.assertEqual(result["data"]["codigo_comprobante"], 201)
+        self.assertEqual(result["data"]["numero_factura"], "00002-00000192")
+        self.assertEqual(result["data"]["fecha_vencimiento_pago"], "2026-01-28")
+        self.assertEqual(result["data"]["fecha_vencimiento"], "2026-01-28")
+        self.assertEqual(result["data"]["fecha_vencimiento_cae"], "2026-01-24")
+        self.assertEqual(result["data"]["subtotal"], 5324000.0)
+        self.assertEqual(result["data"]["iva_total"], 1118040.0)
+        self.assertEqual(result["data"]["total"], 6442040.0)
+        self.assertEqual(result["data"]["iva"][0]["descripcion"], "21%")
+        self.assertEqual(result["data"]["items"][0]["descripcion"], "Analista de procesos Sr. - Dic 2025")
+        self.assertEqual(result["data"]["descripcion"], "Analista de procesos Sr. - Dic 2025")
+
+    def test_fce_credit_note_code_builds_note_type(self):
+        text = """NOTA DE CRÉDITO ELECTRÓNICA MiPyMEs (FCE)
+A CÓD. 203
+Punto de Venta: 00002 Comp. Nro: 00000193
+Fecha de Emisión: 15/01/2026
+Razón Social: CS TECH CONSULTING S.A.
+CUIT: 30715444530
+Condición frente al IVA: IVA Responsable Inscripto
+Fecha de Vto. para el pago: 28/01/2026
+CUIT: 33699685459 Apellido y Nombre / Razón Social: CORREO ANDREANI SA
+01 Ajuste de servicio 1,00 unidades 1000,00 0,00 1000,00 21% 1210,00
+Importe Neto Gravado: $ 1000,00
+IVA 21%: $ 210,00
+Importe Total: $ 1210,00
+CAE Nro: 76012345678902
+Fecha de Vto. de CAE: 24/01/2026
+"""
+
+        result = extract_document(text, filename="mipyme-fce-nc.jpg")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["tipo_comprobante"], "Nota de Credito A")
+        self.assertEqual(result["data"]["codigo_comprobante"], 203)
+
     def test_payment_due_date_is_separate_from_cae_due_date_and_name_is_cleaned(self):
         text = """ORIGINAL
 C

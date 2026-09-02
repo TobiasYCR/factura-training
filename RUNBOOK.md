@@ -281,6 +281,14 @@ curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true" \
   -F "file=@factura.pdf"
 ```
 
+Diagnostico:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/extract/debug?force_ocr=true&ocr_policy=auto" \
+  -H "X-API-Key: <API_KEY>" \
+  -F "file=@factura.pdf"
+```
+
 ## 13. Usar Qwen como fallback desde la API
 
 En una PC con GPU:
@@ -334,6 +342,7 @@ Ejecutar:
 ```bash
 FACTURA_API_KEY="<API_KEY>" \
 FACTURA_LOG_FILE="$PWD/logs/extractions.jsonl" \
+FACTURA_REVIEW_CASES_DIR="$PWD/logs/review_cases" \
 python api.py --host 0.0.0.0 --port 8000
 ```
 
@@ -380,6 +389,18 @@ El log guarda:
 - tipo de documento detectado.
 
 El sistema actual no guarda PDFs completos ni OCR completo en el log JSONL. Si una request requiere revision, guarda un caso separado en `review_cases/` con payload y OCR para depurar. Tampoco reentrena automaticamente con documentos subidos.
+
+Resumen de logs:
+
+```bash
+python scripts/summarize_ocr_logs.py logs/extractions.jsonl
+```
+
+Regresion con PDFs reales:
+
+```bash
+python scripts/run_regression_pdfs.py data/regression_pdfs --expected-dir data/regression_expected --force-ocr
+```
 
 ## 18. Estado del sistema
 

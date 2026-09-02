@@ -53,6 +53,12 @@ La respuesta incluye metadata de control:
 
 Si `FACTURA_LOG_FILE` esta configurado, los casos con `requires_review=true` se guardan automaticamente junto al log, dentro de `review_cases/`.
 
+Diagnostico con OCR crudo:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/extract/debug?force_ocr=true&ocr_policy=auto" -F "file=@factura.pdf"
+```
+
 ## 4. Entrenamiento
 
 El entrenamiento LoRA se hace en la PC con GPU:
@@ -93,10 +99,22 @@ Set fijo de regresion con PDFs reales:
 python scripts/batch_extract_pdfs.py data/regression_pdfs --pattern "*.pdf" --output-dir tmp/regression_check --force-ocr --ocr-policy auto --write-json --write-ocr
 ```
 
+Comparar PDFs de regresion contra JSON esperado:
+
+```bash
+python scripts/run_regression_pdfs.py data/regression_pdfs --expected-dir data/regression_expected --force-ocr
+```
+
 Para generar Facturas B sinteticas:
 
 ```bash
 python scripts/generate_synthetic_invoices.py --types B --count 6 --output-dir data/synthetic_factura_b
+```
+
+Resumen de logs:
+
+```bash
+python scripts/summarize_ocr_logs.py logs/extractions.jsonl
 ```
 
 ## 6. API y despliegue

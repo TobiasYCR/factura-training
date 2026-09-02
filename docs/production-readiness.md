@@ -239,6 +239,8 @@ Con `FACTURA_LOG_FILE` definido, el sistema guarda un log por request con metada
 
 El log no incluye PDF completo ni OCR completo. Si una extraccion queda con warnings, errores o baja confianza, se guarda un caso de revision separado con OCR y payload normalizado.
 
+Para diagnostico puntual existe `POST /extract/debug`, que requiere la misma API key y devuelve preview/OCR crudo dentro de la respuesta. Usarlo solo en entornos controlados.
+
 Los datasets de entrenamiento se construyen con `scripts/build_real_dataset.py` a partir de archivos OCR/JSON ya procesados.
 
 ## 12. Medicion

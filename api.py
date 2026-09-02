@@ -474,7 +474,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "service": "factura-training-api",
                     "ocr": get_ocr_status(),
-                    "endpoints": ["GET /health", "POST /extract"],
+                    "endpoints": ["GET /health", "POST /extract", "POST /extract/debug"],
                 },
             )
             return
@@ -482,7 +482,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path != "/extract":
+        if path not in {"/extract", "/extract/debug"}:
             json_response(self, HTTPStatus.NOT_FOUND, {"ok": False, "error": "Endpoint no encontrado."})
             return
         if not self.is_authorized():
@@ -490,6 +490,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             return
 
         try:
+            debug_mode = path == "/extract/debug"
             request_id = str(uuid.uuid4())
             request = self.read_extract_request()
             result = extract_document(
@@ -565,6 +566,13 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
             review_case_file = persist_review_case(request_id, request, result)
             if review_case_file:
                 result["review_case_file"] = review_case_file
+            if debug_mode:
+                result["debug"] = {
+                    "ocr_text": request["ocr_text"],
+                    "ocr_text_preview": request["ocr_text"][:3000],
+                    "parser_text_preview": parser_text[:3000],
+                    "used_multipass": bool((request.get("text_extractor") or {}).get("multipass")),
+                }
             append_log(
                 {
                     "request_id": request_id,
@@ -582,6 +590,7 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                     "input": result["input"],
                     "document_type": result["data"].get("document_type") if isinstance(result["data"], dict) else None,
                     "tipo_comprobante": result["data"].get("tipo_comprobante") if isinstance(result["data"], dict) else None,
+                    "debug": debug_mode,
                 }
             )
             json_response(self, HTTPStatus.OK if result["ok"] else HTTPStatus.UNPROCESSABLE_ENTITY, result)
@@ -712,6 +721,7 @@ def main():
     print(f"Factura Training API escuchando en http://{args.host}:{args.port}")
     print("Healthcheck: GET /health")
     print("Extraccion:  POST /extract con multipart field file=@factura.pdf")
+    print("Diagnostico:  POST /extract/debug con multipart field file=@factura.pdf")
     if API_KEY:
         print("API key: requerida por header X-API-Key")
     if LOG_FILE:
