@@ -1,0 +1,19 @@
+FACTURA B
+Cod. 006
+Punto de Venta: 00031 Comp. Nro: 00000006
+Fecha de Emision: 24/03/2026
+Insumos Patagonia SRL
+CUIT: 20-28970365-3
+IVA Responsable Inscripto
+Cliente: Consumidor Final
+DNI: 41299457
+Condicion IVA: Consumidor Final
+Moneda: PES
+Tipo Cambio: 1
+Item: Materiales de oficina Cant 3 P.Unit 60.979,81 Importe 182.939,43
+Item: Venta de insumos Cant 10 P.Unit 34.650,91 Importe 346.509,10
+Subtotal: $ 529.448,53
+Importe Total: $ 529.448,53
+CAE: 61826008277802
+Vto. CAE: 03/04/2026
+MUESTRA SIN VALIDEZ FISCAL

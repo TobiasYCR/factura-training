@@ -45,6 +45,14 @@ Extraer PDF:
 curl -X POST "http://127.0.0.1:8000/extract?force_ocr=true" -F "file=@factura.pdf"
 ```
 
+La respuesta incluye metadata de control:
+
+- `warnings`: alertas no bloqueantes para campos dudosos o importes inconsistentes.
+- `requires_review`: `true` cuando conviene revisar manualmente la extraccion.
+- `field_confidence`: confianza simple por campo principal.
+
+Si `FACTURA_LOG_FILE` esta configurado, los casos con `requires_review=true` se guardan automaticamente junto al log, dentro de `review_cases/`.
+
 ## 4. Entrenamiento
 
 El entrenamiento LoRA se hace en la PC con GPU:
@@ -77,6 +85,18 @@ Resumen de errores:
 
 ```bash
 python scripts/analyze_eval_results.py data/eval_results_production.jsonl --eval-file data/real_eval.jsonl
+```
+
+Set fijo de regresion con PDFs reales:
+
+```bash
+python scripts/batch_extract_pdfs.py data/regression_pdfs --pattern "*.pdf" --output-dir tmp/regression_check --force-ocr --ocr-policy auto --write-json --write-ocr
+```
+
+Para generar Facturas B sinteticas:
+
+```bash
+python scripts/generate_synthetic_invoices.py --types B --count 6 --output-dir data/synthetic_factura_b
 ```
 
 ## 6. API y despliegue

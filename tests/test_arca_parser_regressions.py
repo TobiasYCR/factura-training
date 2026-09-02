@@ -1,6 +1,6 @@
 import unittest
 
-from api import add_arca_integration_fields
+from api import add_arca_integration_fields, extract_document
 from infer import (
     assess_document_quality,
     build_display_description,
@@ -74,6 +74,59 @@ class ArcaParserRegressionTests(unittest.TestCase):
         self.assertEqual(parsed["descripcion"], "Servicio mensual de prueba")
         self.assertEqual(validate_extracted_document_json(parsed), [])
         self.assertNotIn("Factura A sin IVA discriminado.", assess_document_quality(parsed, text))
+
+    def test_api_returns_field_confidence_and_review_flag(self):
+        text = arca_text(
+            "B",
+            6,
+            "30715999999",
+            "00003",
+            "00000042",
+            "71111111111111",
+            "30/04/2021",
+            "Servicio mensual de prueba",
+            1210.0,
+        )
+
+        result = extract_document(text, filename="factura-b.pdf")
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["requires_review"])
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["field_confidence"]["numero_factura"], 1.0)
+        self.assertEqual(result["field_confidence"]["total"], 1.0)
+        self.assertEqual(result["field_confidence"]["description"], 1.0)
+
+    def test_factura_b_labeled_item_rows_build_description(self):
+        text = """FACTURA B
+Cod. 006
+Punto de Venta: 00018 Comp. Nro: 00000001
+Fecha de Emision: 09/11/2026
+Consultora Andina SRL
+CUIT: 20-85521056-1
+IVA Responsable Inscripto
+Cliente: Hotel Plaza SRL
+CUIT Cliente: 20-93267849-7
+Condicion IVA: Consumidor Final
+Moneda: PES
+Tipo Cambio: 1
+Item: Consultoria operativa Cant 3 P.Unit 60.157,08 Importe 180.471,24
+Item: Capacitacion Cant 10 P.Unit 28.270,02 Importe 282.700,20
+Subtotal: $ 463.171,44
+Importe Total: $ 463.171,44
+CAE: 10365667935643
+Vto. CAE: 19/11/2026
+"""
+
+        result = extract_document(text, filename="factura-b.pdf")
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["requires_review"])
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(
+            result["data"]["descripcion"],
+            "Consultoria operativa y Capacitacion",
+        )
 
     def test_payment_due_date_is_separate_from_cae_due_date_and_name_is_cleaned(self):
         text = """ORIGINAL

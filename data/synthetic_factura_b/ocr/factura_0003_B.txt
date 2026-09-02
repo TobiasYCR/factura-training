@@ -1,0 +1,22 @@
+FACTURA B
+Cod. 006
+Punto de Venta: 00028 Comp. Nro: 00000003
+Fecha de Emision: 11/02/2026
+Tecnica Norte SA
+CUIT: 30-10240837-1
+IVA Responsable Inscripto
+Cliente: Clinica Modelo SA
+CUIT Cliente: 30-59249143-8
+Condicion IVA: Consumidor Final
+Moneda: PES
+Tipo Cambio: 1
+Item: Licencia de software Cant 3 P.Unit 84.281,19 Importe 252.843,57
+Item: Servicio logistico Cant 3 P.Unit 66.911,85 Importe 200.735,55
+Item: Servicio tecnico mensual Cant 1 P.Unit 20.525,32 Importe 20.525,32
+Item: Consultoria operativa Cant 4 P.Unit 50.246,61 Importe 200.986,44
+Item: Servicio tecnico mensual Cant 3 P.Unit 36.390,25 Importe 109.170,75
+Subtotal: $ 784.261,63
+Importe Total: $ 784.261,63
+CAE: 35858150173618
+Vto. CAE: 21/02/2026
+MUESTRA SIN VALIDEZ FISCAL

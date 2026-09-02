@@ -41,6 +41,7 @@ MODEL_CACHE = {}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
 API_KEY = os.environ.get("FACTURA_API_KEY")
 LOG_FILE = os.environ.get("FACTURA_LOG_FILE")
+REVIEW_CASES_DIR = os.environ.get("FACTURA_REVIEW_CASES_DIR")
 
 
 def looks_like_broken_embedded_text(text):
@@ -107,6 +108,70 @@ def document_completeness(data):
     return scalar_present / scalar_total
 
 
+def get_nested_value(data, path):
+    value = data
+    for part in path.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def score_field_value(value):
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, list):
+        return 1.0 if value else 0.0
+    return 1.0
+
+
+def calculate_field_confidence(data):
+    if not isinstance(data, dict):
+        return {}
+
+    if data.get("document_type"):
+        paths = {
+            "provider": "provider.name",
+            "number": "document.number",
+            "date": "document.date",
+            "buyer": "buyer.name",
+            "buyer_business_name": "buyer.business_name",
+            "customer_number": "document.customer_number",
+            "currency": "currency",
+            "total": "total",
+            "paid": "paid",
+            "balance_due": "balance_due",
+            "status": "document.status",
+            "description": "descripcion",
+            "items": "items",
+        }
+    else:
+        paths = {
+            "tipo_comprobante": "tipo_comprobante",
+            "numero_factura": "numero_factura",
+            "fecha_emision": "fecha_emision",
+            "fecha_vencimiento_pago": "fecha_vencimiento_pago",
+            "fecha_vencimiento_cae": "fecha_vencimiento_cae",
+            "emisor_nombre": "emisor.nombre",
+            "emisor_cuit": "emisor.cuit",
+            "receptor_nombre": "receptor.nombre",
+            "receptor_cuit": "receptor.cuit",
+            "subtotal": "subtotal",
+            "iva_total": "iva_total",
+            "tributos_total": "tributos_total",
+            "total": "total",
+            "cae": "cae",
+            "description": "descripcion",
+            "items": "items",
+        }
+
+    return {name: score_field_value(get_nested_value(data, path)) for name, path in paths.items()}
+
+
+def should_require_review(errors, warnings, confidence, min_confidence):
+    return bool(errors) or bool(warnings) or confidence < min_confidence
+
+
 def add_arca_integration_fields(data, source_text=None):
     """Expose fields consumed by the administrative invoice screen."""
     if not isinstance(data, dict):
@@ -157,6 +222,44 @@ def append_log(event):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as file:
         file.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def review_cases_dir():
+    if REVIEW_CASES_DIR:
+        return Path(REVIEW_CASES_DIR)
+    if LOG_FILE:
+        return Path(LOG_FILE).parent / "review_cases"
+    return None
+
+
+def persist_review_case(request_id, request, result):
+    if not result.get("requires_review"):
+        return None
+    directory = review_cases_dir()
+    if directory is None:
+        return None
+
+    directory.mkdir(parents=True, exist_ok=True)
+    filename = Path(request.get("filename") or "ocr_text").stem
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("_") or "document"
+    case_path = directory / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}_{request_id}_{safe_name}.json"
+    payload = {
+        "request_id": request_id,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "filename": request.get("filename"),
+        "ok": result.get("ok"),
+        "source": result.get("source"),
+        "confidence": result.get("confidence"),
+        "requires_review": result.get("requires_review"),
+        "errors": result.get("errors"),
+        "warnings": result.get("warnings"),
+        "field_confidence": result.get("field_confidence"),
+        "input": result.get("input"),
+        "data": result.get("data"),
+        "ocr_text": request.get("ocr_text"),
+    }
+    case_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(case_path)
 
 
 def parse_bool(value, default=False):
@@ -335,14 +438,17 @@ def extract_document(
     data = add_arca_integration_fields(parsed, parser_text)
     warnings = assess_document_quality(data, parser_text)
     used_model = extraction_source == "model"
+    confidence = calculate_confidence(data, errors, extraction_source, used_model, warnings)
     return {
         "ok": not errors,
         "source": extraction_source,
         "model": model_name,
-        "confidence": calculate_confidence(data, errors, extraction_source, used_model, warnings),
+        "confidence": confidence,
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
         "errors": errors,
         "warnings": warnings,
+        "requires_review": should_require_review(errors, warnings, confidence, min_confidence),
+        "field_confidence": calculate_field_confidence(data),
         "data": data,
         "raw_model_response": raw_model_response,
     }
@@ -441,6 +547,13 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                 result["source"] == "model",
                 result["warnings"],
             )
+            result["requires_review"] = should_require_review(
+                result["errors"],
+                result["warnings"],
+                result["confidence"],
+                request["min_confidence"],
+            )
+            result["field_confidence"] = calculate_field_confidence(result["data"])
             result["input"] = {
                 "filename": request["filename"],
                 "text_extractor": request["text_extractor"],
@@ -449,6 +562,9 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                 "ocr_text_length": len(request["ocr_text"]),
             }
             result["request_id"] = request_id
+            review_case_file = persist_review_case(request_id, request, result)
+            if review_case_file:
+                result["review_case_file"] = review_case_file
             append_log(
                 {
                     "request_id": request_id,
@@ -460,6 +576,9 @@ class InvoiceApiHandler(BaseHTTPRequestHandler):
                     "elapsed_ms": result["elapsed_ms"],
                     "errors": result["errors"],
                     "warnings": result["warnings"],
+                    "requires_review": result["requires_review"],
+                    "field_confidence": result["field_confidence"],
+                    "review_case_file": review_case_file,
                     "input": result["input"],
                     "document_type": result["data"].get("document_type") if isinstance(result["data"], dict) else None,
                     "tipo_comprobante": result["data"].get("tipo_comprobante") if isinstance(result["data"], dict) else None,

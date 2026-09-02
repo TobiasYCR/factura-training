@@ -1,0 +1,22 @@
+FACTURA B
+Cod. 006
+Punto de Venta: 00021 Comp. Nro: 00000002
+Fecha de Emision: 04/08/2026
+Comercial Rio Sur SA
+CUIT: 30-93987222-0
+IVA Responsable Inscripto
+Cliente: Consumidor Final
+DNI: 38465994
+Condicion IVA: Consumidor Final
+Moneda: PES
+Tipo Cambio: 1
+Item: Materiales de oficina Cant 1 P.Unit 54.037,11 Importe 54.037,11
+Item: Honorarios profesionales Cant 2 P.Unit 58.818,67 Importe 117.637,34
+Item: Servicio tecnico mensual Cant 1 P.Unit 76.235,14 Importe 76.235,14
+Item: Venta de insumos Cant 3 P.Unit 20.333,65 Importe 61.000,95
+Item: Servicio logistico Cant 4 P.Unit 19.374,62 Importe 77.498,48
+Subtotal: $ 386.409,02
+Importe Total: $ 386.409,02
+CAE: 89749822247262
+Vto. CAE: 14/08/2026
+MUESTRA SIN VALIDEZ FISCAL

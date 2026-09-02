@@ -1029,6 +1029,31 @@ def extract_arca_reference_items(text):
     return items
 
 
+def extract_labeled_item_rows(text):
+    items = []
+    for raw_line in str(text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        item = re.match(
+            r"Item:\s*(?P<description>.+?)\s+Cant\s+(?P<quantity>\d+(?:[,.]\d+)?)\s+P\.?\s*Unit\.?\s+(?P<unit>[\d.,]+)\s+Importe\s+(?P<amount>[\d.,]+)$",
+            line,
+            re.IGNORECASE,
+        )
+        if not item:
+            continue
+        description = clean_arca_description_candidate(item.group("description"))
+        if not description:
+            continue
+        items.append(
+            {
+                "descripcion": description,
+                "cantidad": parse_quantity(item.group("quantity")),
+                "precio_unitario": parse_ar_money(item.group("unit")),
+                "importe": parse_ar_money(item.group("amount")),
+            }
+        )
+    return items
+
+
 def extract_arca_description_items(text):
     """Extract rows from ARCA tables headed by Descripcion/Importe."""
     lines = [re.sub(r"\s+", " ", line).strip() for line in str(text or "").splitlines()]
@@ -1239,7 +1264,8 @@ def build_display_description(parsed, source_text=None):
         return _join_display_values(list(dict.fromkeys(descriptions)))
 
     fallback_items = (
-        extract_arca_description_items(source_text)
+        extract_labeled_item_rows(source_text)
+        or extract_arca_description_items(source_text)
         or extract_arca_reference_items(source_text)
         or extract_arca_concept_items(source_text)
         or extract_cianbox_detail_items(source_text)
@@ -1334,15 +1360,24 @@ def enrich_arca_parser_result(parsed, text):
         emitter["nombre"] = clean_arca_name(emitter.get("nombre")) or extract_arca_emitter_name(normalized_text)
         normalized["emisor"] = emitter
 
-    if not normalized.get("items"):
-        normalized["items"] = (
-            extract_arca_items(normalized_text)
-            or extract_arca_description_items(normalized_text)
-            or extract_arca_reference_items(normalized_text)
-            or extract_arca_concept_items(normalized_text)
-            or extract_cianbox_detail_items(normalized_text)
-            or extract_compact_description_items(normalized_text)
+    recovered_items = (
+        extract_labeled_item_rows(normalized_text)
+        or extract_arca_items(normalized_text)
+        or extract_arca_description_items(normalized_text)
+        or extract_arca_reference_items(normalized_text)
+        or extract_arca_concept_items(normalized_text)
+        or extract_cianbox_detail_items(normalized_text)
+        or extract_compact_description_items(normalized_text)
+    )
+    if not normalized.get("items") or (
+        recovered_items
+        and all(
+            has_suspicious_short_description(item.get("descripcion"))
+            for item in normalized.get("items") or []
+            if isinstance(item, dict)
         )
+    ):
+        normalized["items"] = recovered_items
 
     return normalize_invoice_json(normalized)
 

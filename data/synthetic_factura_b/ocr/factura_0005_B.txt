@@ -1,0 +1,18 @@
+FACTURA B
+Cod. 006
+Punto de Venta: 00025 Comp. Nro: 00000005
+Fecha de Emision: 14/06/2026
+Comercial Rio Sur SA
+CUIT: 30-61894912-0
+IVA Responsable Inscripto
+Cliente: Hotel Plaza SRL
+CUIT Cliente: 30-54148467-3
+Condicion IVA: Consumidor Final
+Moneda: PES
+Tipo Cambio: 1
+Item: Honorarios profesionales Cant 10 P.Unit 33.298,66 Importe 332.986,60
+Subtotal: $ 332.986,60
+Importe Total: $ 332.986,60
+CAE: 96974755689006
+Vto. CAE: 24/06/2026
+MUESTRA SIN VALIDEZ FISCAL

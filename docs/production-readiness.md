@@ -38,6 +38,7 @@ Los ejemplos usan placeholders para evitar publicar datos sensibles:
 ```bash
 FACTURA_API_KEY="<API_KEY>"
 FACTURA_LOG_FILE="/var/log/factura-training/extractions.jsonl"
+FACTURA_REVIEW_CASES_DIR="/var/log/factura-training/review_cases"
 FACTURA_MAX_UPLOAD_MB="25"
 OCR_LANG="spa+eng"
 OCR_DPI="220"
@@ -47,6 +48,7 @@ Significado:
 
 - `FACTURA_API_KEY`: protege `POST /extract`.
 - `FACTURA_LOG_FILE`: guarda logs JSONL livianos.
+- `FACTURA_REVIEW_CASES_DIR`: guarda payload + OCR de casos que requieren revision.
 - `FACTURA_MAX_UPLOAD_MB`: limite de subida.
 - `OCR_LANG`: idiomas para Tesseract.
 - `OCR_DPI`: resolucion para renderizar PDFs escaneados.
@@ -219,12 +221,15 @@ Incluye:
 - `source`;
 - `model`;
 - `confidence`;
+- `warnings`;
+- `requires_review`;
+- `field_confidence`;
 - `elapsed_ms`;
 - errores;
 - metadata del input;
 - tipo de documento detectado.
 
-No guarda PDF ni OCR completo.
+No guarda PDF ni OCR completo en el JSONL. Los casos con `requires_review=true` guardan un archivo separado en `FACTURA_REVIEW_CASES_DIR`, o en `review_cases/` junto al log si esa variable no esta definida.
 
 ## 11. Logs y documentos reales
 
@@ -232,7 +237,7 @@ El sistema actual no autoentrena con documentos subidos por usuarios.
 
 Con `FACTURA_LOG_FILE` definido, el sistema guarda un log por request con metadata operativa.
 
-El log no incluye PDF completo ni OCR completo.
+El log no incluye PDF completo ni OCR completo. Si una extraccion queda con warnings, errores o baja confianza, se guarda un caso de revision separado con OCR y payload normalizado.
 
 Los datasets de entrenamiento se construyen con `scripts/build_real_dataset.py` a partir de archivos OCR/JSON ya procesados.
 

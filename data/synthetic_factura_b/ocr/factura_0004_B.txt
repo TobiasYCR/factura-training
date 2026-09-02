@@ -1,0 +1,22 @@
+FACTURA B
+Cod. 006
+Punto de Venta: 00008 Comp. Nro: 00000004
+Fecha de Emision: 01/03/2026
+Distribuidora Centro
+CUIT: 20-89266972-9
+IVA Responsable Inscripto
+Cliente: Tienda La Esquina
+CUIT Cliente: 27-35977875-5
+Condicion IVA: Consumidor Final
+Moneda: PES
+Tipo Cambio: 1
+Item: Materiales de oficina Cant 1 P.Unit 56.266,50 Importe 56.266,50
+Item: Consultoria operativa Cant 3 P.Unit 68.439,64 Importe 205.318,92
+Item: Venta de insumos Cant 3 P.Unit 51.215,44 Importe 153.646,32
+Item: Materiales de oficina Cant 1 P.Unit 58.042,44 Importe 58.042,44
+Item: Repuestos varios Cant 3 P.Unit 41.274,64 Importe 123.823,92
+Subtotal: $ 597.098,10
+Importe Total: $ 597.098,10
+CAE: 62505424451328
+Vto. CAE: 11/03/2026
+MUESTRA SIN VALIDEZ FISCAL

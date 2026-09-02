@@ -1,0 +1,21 @@
+FACTURA B
+Cod. 006
+Punto de Venta: 00018 Comp. Nro: 00000001
+Fecha de Emision: 09/11/2026
+Consultora Andina SRL
+CUIT: 20-85521056-1
+IVA Responsable Inscripto
+Cliente: Hotel Plaza SRL
+CUIT Cliente: 20-93267849-7
+Condicion IVA: Consumidor Final
+Moneda: PES
+Tipo Cambio: 1
+Item: Consultoria operativa Cant 3 P.Unit 60.157,08 Importe 180.471,24
+Item: Capacitacion Cant 10 P.Unit 28.270,02 Importe 282.700,20
+Item: Servicio logistico Cant 1 P.Unit 41.249,61 Importe 41.249,61
+Item: Abono de mantenimiento Cant 1 P.Unit 45.939,08 Importe 45.939,08
+Subtotal: $ 550.360,13
+Importe Total: $ 550.360,13
+CAE: 10365667935643
+Vto. CAE: 19/11/2026
+MUESTRA SIN VALIDEZ FISCAL

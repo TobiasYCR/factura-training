@@ -263,6 +263,7 @@ Con API key y logs:
 ```bash
 FACTURA_API_KEY="<API_KEY>" \
 FACTURA_LOG_FILE="$PWD/logs/extractions.jsonl" \
+FACTURA_REVIEW_CASES_DIR="$PWD/logs/review_cases" \
 python api.py --host 0.0.0.0 --port 8000
 ```
 
@@ -356,6 +357,7 @@ Ejecutar:
 docker run --rm -p 8000:8000 \
   -e FACTURA_API_KEY="<API_KEY>" \
   -e FACTURA_LOG_FILE="/app/logs/extractions.jsonl" \
+  -e FACTURA_REVIEW_CASES_DIR="/app/logs/review_cases" \
   -v "$PWD/logs:/app/logs" \
   factura-training-api
 ```
@@ -371,10 +373,13 @@ El log guarda:
 - fuente usada;
 - confianza;
 - errores;
+- warnings;
+- requires_review;
+- confianza por campo;
 - metadata del input;
 - tipo de documento detectado.
 
-El sistema actual no guarda PDFs completos ni OCR completo en el log. Tampoco reentrena automaticamente con documentos subidos.
+El sistema actual no guarda PDFs completos ni OCR completo en el log JSONL. Si una request requiere revision, guarda un caso separado en `review_cases/` con payload y OCR para depurar. Tampoco reentrena automaticamente con documentos subidos.
 
 ## 18. Estado del sistema
 

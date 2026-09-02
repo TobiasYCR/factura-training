@@ -33,6 +33,7 @@ INVOICE_TYPES = [
     ("B", 6, "IVA Responsable Inscripto", "Consumidor Final"),
     ("C", 11, "Monotributo", "Responsable Inscripto"),
 ]
+INVOICE_TYPES_BY_LETTER = {letter: item for letter, *item in INVOICE_TYPES}
 
 BUSINESS_NAMES = [
     "Servicios del Plata SRL",
@@ -108,8 +109,9 @@ def iso_to_ar(value: str) -> str:
     return f"{day}/{month}/{year}"
 
 
-def build_invoice(idx: int, rng: random.Random) -> dict:
-    letter, code, emitter_tax, default_receiver_tax = INVOICE_TYPES[idx % len(INVOICE_TYPES)]
+def build_invoice(idx: int, rng: random.Random, invoice_types=None) -> dict:
+    invoice_types = invoice_types or INVOICE_TYPES
+    letter, code, emitter_tax, default_receiver_tax = invoice_types[idx % len(invoice_types)]
     pv = f"{rng.randint(1, 35):05d}"
     nro = f"{idx + 1:08d}"
     emitted = date(2026, 1, 1) + timedelta(days=rng.randint(0, 364))
@@ -408,10 +410,20 @@ def main():
     parser.add_argument("--count", type=int, default=100)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", default="data/synthetic_invoices")
+    parser.add_argument(
+        "--types",
+        default="A,B,C",
+        help="Letras de comprobante a generar, separadas por coma. Ejemplo: B o A,B.",
+    )
     parser.add_argument("--no-pdf", action="store_true", help="Genera solo JSONL/OCR/manifest sin PDFs.")
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
+    requested_letters = [letter.strip().upper() for letter in args.types.split(",") if letter.strip()]
+    invalid_letters = sorted(set(requested_letters) - set(INVOICE_TYPES_BY_LETTER))
+    if invalid_letters:
+        raise SystemExit(f"Tipos no soportados: {', '.join(invalid_letters)}")
+    invoice_types = [(letter, *INVOICE_TYPES_BY_LETTER[letter]) for letter in requested_letters]
     out = Path(args.output_dir)
     pdf_dir = out / "pdfs"
     ocr_dir = out / "ocr"
@@ -426,7 +438,7 @@ def main():
     manifest_path = out / "manifest.jsonl"
     with train_path.open("w", encoding="utf-8") as train_file, manifest_path.open("w", encoding="utf-8") as manifest_file:
         for idx in range(args.count):
-            label = build_invoice(idx, rng)
+            label = build_invoice(idx, rng, invoice_types)
             stem = f"factura_{idx + 1:04d}_{label['tipo_comprobante'][-1]}"
             pdf_path = pdf_dir / f"{stem}.pdf"
             ocr_path = ocr_dir / f"{stem}.txt"

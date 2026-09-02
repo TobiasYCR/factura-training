@@ -53,6 +53,9 @@ def process_file(path, args):
         "source": None,
         "label": None,
         "errors": [],
+        "warnings": [],
+        "requires_review": False,
+        "field_confidence": {},
     }
 
     try:
@@ -116,6 +119,9 @@ def process_file(path, args):
                 "source": extracted["source"],
                 "label": document_label(extracted["data"]),
                 "errors": extracted["errors"],
+                "warnings": extracted.get("warnings", []),
+                "requires_review": extracted.get("requires_review", False),
+                "field_confidence": extracted.get("field_confidence", {}),
             }
         )
         if args.write_json:
@@ -184,6 +190,7 @@ def main():
     model_count = 0
     ocr_count = 0
     robust_retry_count = 0
+    review_count = 0
 
     with summary_path.open("w", encoding="utf-8") as summary_file:
         for index, path in enumerate(paths, start=1):
@@ -196,8 +203,9 @@ def main():
             text_extractor = item.get("text_extractor") or {}
             ocr_count += int(text_extractor.get("method") == "ocr")
             robust_retry_count += int(len(item.get("ocr_attempts") or []) > 1)
+            review_count += int(item.get("requires_review"))
             label = item.get("label") or {}
-            status = "OK" if item["ok"] else "FAIL"
+            status = "REVIEW" if item.get("requires_review") else "OK" if item["ok"] else "FAIL"
             print(
                 f"{index:03d}/{len(paths):03d} {status} "
                 f"{Path(item['file']).name} | {label.get('type')} | {label.get('number')} | "
@@ -205,6 +213,8 @@ def main():
             )
             if item["errors"]:
                 print("  " + " | ".join(item["errors"][:3]))
+            if item.get("warnings"):
+                print("  Warnings: " + " | ".join(item["warnings"][:3]))
 
     print("-" * 80)
     print(f"Archivos: {len(paths)}")
@@ -213,6 +223,7 @@ def main():
     print(f"Modelo: {model_count}")
     print(f"OCR visual: {ocr_count}")
     print(f"Reintentos OCR robusto: {robust_retry_count}")
+    print(f"Requieren revision: {review_count}")
     print(f"Resumen: {summary_path}")
 
 
