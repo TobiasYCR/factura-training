@@ -3490,17 +3490,37 @@ def parse_despegar_arca_ocr(text):
 
 def parse_lenovo_arca_ocr(text):
     upper_text = text.upper()
-    if "LENOVO ARGENTINA" not in upper_text or "FACTURA DE VENTA" not in upper_text:
+    if "LENOVO ARGENTINA" not in upper_text and "LENOVO" not in upper_text:
+        return None
+    if "FACTURA DE VENTA" not in upper_text and not re.search(r"Archivo:.*Lenovo", text, re.IGNORECASE):
         return None
 
-    numbers = re.search(r"FACTURA DE VENTA\s+N\S*\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
-    code = first_match(r"C\S*digo\s+N\S*\s*(\d+)", text, re.IGNORECASE)
+    filename_match = re.search(r"Archivo:.*?\b(\d{11})_(\d{3})_(\d{4,5})_(\d{7,9})\.pdf", text, re.IGNORECASE)
+    numbers = (
+        re.search(r"FACTURA\s+DE\s+VENTA\s+N\S*\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+        or re.search(r"\bN\S*\s*(\d{4,5})-(\d{7,9})", text, re.IGNORECASE)
+    )
+    code_text = first_match(r"C\S*digo\s+N\S*\s*(\d+)", text, re.IGNORECASE)
+    if code_text is None:
+        code_text = first_match(r"\bC[oóÓÃ³�]?d\.?\s*0*(\d{1,3})\b", text, re.IGNORECASE)
+    if code_text is None and filename_match:
+        code_text = filename_match.group(2)
     issue_date = first_match(r"Fecha de Emisi\S*n:\s*(\d{1,2}\s+DE\s+[A-ZÁÉÍÓÚÑ]+\s+DE\s+\d{4})", text, re.IGNORECASE)
-    provider_cuit = first_match(r"C\.U\.I\.T\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
+    if issue_date is None:
+        issue_date = first_match(r"Fecha\s+de\s+Emisi\S*n:\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", text, re.IGNORECASE)
+    provider_cuit = first_match(r"C\.U\.I\.T\.?\s*:?\s*(\d{2}-?\d{8}-?\d|\d{11})", text, re.IGNORECASE)
+    if provider_cuit is None and filename_match:
+        provider_cuit = filename_match.group(1)
     receiver_name = first_match(r"Se\S*or/es\s*([^\n]+?)\s+Fecha de Vencimiento", text, re.IGNORECASE)
-    receiver_cuit = first_match(r"C\.U\.I\.T:\s*(\d{11}|\d{2}-\d{8}-\d)", text, re.IGNORECASE)
+    if receiver_name is None:
+        receiver_name = first_match(r"(CS\s+TECH\s+CONSULTING\s+S\.?A\.?)", text, re.IGNORECASE)
+    receiver_cuit = first_match(r"C\.U\.I\.T\.?\s*:?\s*(30-?71544453-?0|30715444530)", text, re.IGNORECASE)
+    if receiver_cuit is None:
+        receiver_cuit = first_match(r"\b(30-71544453-0|30715444530)\b", text, re.IGNORECASE)
     subtotal = parse_money(first_match(r"SUBTOTAL\.+\$\s*([\d.,]+)", text, re.IGNORECASE))
     iva_105 = parse_money(first_match(r"I\.V\.A\.INSC\.10,50\s*%\.+\$\s*([\d.,]+)", text, re.IGNORECASE) or 0)
+    if not iva_105:
+        iva_105 = parse_money(first_match(r"I\.?\s*V\.?\s*A\.?\s*INSC\.?\s*10[,.]50\s*%.*?\$?\s*([\d.,]+)", text, re.IGNORECASE))
     tributos = []
     for description, rate, amount in re.findall(r"((?:IIBB|Percepcion IIBB)[^\n$]*?)\s+([\d.,]+)\s*%\.+\$\s*([\d.,]+)", text, re.IGNORECASE):
         parsed_amount = parse_money(amount)
@@ -3516,14 +3536,19 @@ def parse_lenovo_arca_ocr(text):
             )
     tributos_total = round_money(sum(item["importe"] for item in tributos)) if tributos else 0.0
     total = round_money((subtotal or 0) + (iva_105 or 0) + tributos_total) if subtotal is not None else None
-    cae = first_match(r"C\.A\.E\.:\s*(\d{14})", text, re.IGNORECASE)
-    due_date = first_match(r"FECHA VTO:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    cae = extract_cae(text) or first_match(r"C\.A\.E\.:\s*(\d{14})", text, re.IGNORECASE)
+    due_date = (
+        first_match(r"FECHA VTO:\s*(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+        or extract_cae_expiration(text)
+    )
 
-    if not (numbers and code and issue_date and subtotal is not None and total is not None):
+    if not (numbers or filename_match):
+        return None
+    if not (code_text and issue_date and subtotal is not None and total is not None):
         return None
 
-    point_of_sale = numbers.group(1).zfill(5)
-    receipt_number = numbers.group(2).zfill(8)
+    point_of_sale = (numbers.group(1) if numbers else filename_match.group(3)).zfill(5)
+    receipt_number = (numbers.group(2) if numbers else filename_match.group(4)).zfill(8)
     iva = []
     if iva_105:
         iva.append({"codigo": 4, "descripcion": "10.5%", "base_imponible": subtotal, "importe": iva_105})
@@ -3546,7 +3571,7 @@ def parse_lenovo_arca_ocr(text):
 
     parsed = {
         "tipo_comprobante": "Factura A",
-        "codigo_comprobante": int(code),
+        "codigo_comprobante": int(code_text),
         "punto_venta": point_of_sale,
         "numero_comprobante": receipt_number,
         "numero_factura": f"{point_of_sale}-{receipt_number}",

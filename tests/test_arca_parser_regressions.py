@@ -1089,6 +1089,41 @@ FECHA DE VENCIMIENTO: 06.03.2021
         self.assertEqual(parsed["emisor"]["cuit"], "30-54674125-3")
         self.assertEqual(parsed["receptor"]["cuit"], "30-71544453-0")
 
+    def test_lenovo_invoice_uses_filename_when_ocr_header_is_noisy(self):
+        text = """Archivo: 05 Mayo - Lenovo 30714731382_001_0007_00007635.pdf
+A FACTURA N� 0007-00007635
+Lenovo Argentina SRL
+Av. del Libertador 7208 piso 6
+C�digo N� 01
+I.V.A.Responsable Inscripto Fecha de Emisi�n: 21 DE MAYO DE 2021
+Se�or/es CS TECH CONSULTING S.A Fecha de Vencimiento: Ver leyenda al pie
+C.U.I.T 30-71473138-2
+IVA resp.inscripto sin percepci�n RG2408/08 C.U.I.T: 30715444530
+D E S C R I P C I O N D E B E
+Por la venta de las siguientes unidades Lenovo:
+ZA3V0065AR 4340569272 Yoga Smart Tab - Iron G 1 36.198,19 * 36.198,19
+SUBTOTAL....$ 36.198,19
+I.V.A.INSC.10,50 %....$ 3.800,81
+IIBB BS AS 4.00 %....$ 1.447,93
+Percepcion IIBB CABA 3.50 %....$ 1.266,94
+TOTAL....$ __ __ __ __ __ __ 4 __ 2 .__ 7 1__ 3 ,__ 8 7__
+POR CONSULTAS SOBRE ESTE DOCUMENTO: C.A.E.: 71212538327742
+T.E.: 5293-7800 AREA COBRANZAS FECHA VTO: 31/05/2021
+"""
+        result = extract_document(text, filename="05 Mayo - Lenovo 30714731382_001_0007_00007635.pdf")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["numero_factura"], "00007-00007635")
+        self.assertEqual(result["data"]["emisor"]["cuit"], "30-71473138-2")
+        self.assertEqual(result["data"]["receptor"]["cuit"], "30-71544453-0")
+        self.assertEqual(result["data"]["subtotal"], 36198.19)
+        self.assertEqual(result["data"]["iva_total"], 3800.81)
+        self.assertEqual(result["data"]["tributos_total"], 2714.87)
+        self.assertEqual(result["data"]["total"], 42713.87)
+        self.assertEqual(result["data"]["cae"], "71212538327742")
+        self.assertEqual(result["data"]["fecha_vencimiento_cae"], "2021-05-31")
+        self.assertEqual(result["data"]["descripcion"], "Yoga Smart Tab - Iron G")
+
     def test_quality_warnings_detect_inconsistent_totals(self):
         text = arca_text(
             "A",
