@@ -126,6 +126,23 @@ def score_field_value(value):
     return 1.0
 
 
+def get_arca_invoice_letter(data):
+    tipo = str(data.get("tipo_comprobante") or "")
+    match = re.search(r"\b([ABC])\b", tipo, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+
+    code = str(data.get("codigo_comprobante") or "")
+    code_digits = re.sub(r"\D", "", code)
+    if code_digits in {"1", "2", "3", "201", "202", "203"}:
+        return "A"
+    if code_digits in {"6", "7", "8"}:
+        return "B"
+    if code_digits in {"11", "12", "13"}:
+        return "C"
+    return None
+
+
 def calculate_field_confidence(data):
     if not isinstance(data, dict):
         return {}
@@ -157,13 +174,16 @@ def calculate_field_confidence(data):
             "receptor_nombre": "receptor.nombre",
             "receptor_cuit": "receptor.cuit",
             "subtotal": "subtotal",
-            "iva_total": "iva_total",
             "tributos_total": "tributos_total",
             "total": "total",
             "cae": "cae",
             "description": "descripcion",
-            "items": "items",
         }
+        letter = get_arca_invoice_letter(data)
+        if letter == "A" or not is_missing_value(data.get("iva_total")):
+            paths["iva_total"] = "iva_total"
+        if not is_missing_value(data.get("items")) or is_missing_value(data.get("descripcion")):
+            paths["items"] = "items"
         if data.get("fecha_vencimiento_pago"):
             paths["fecha_vencimiento_pago"] = "fecha_vencimiento_pago"
         if data.get("fecha_vencimiento"):

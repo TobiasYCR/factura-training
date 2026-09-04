@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from api import add_arca_integration_fields, extract_document, extract_upload_text
+from api import add_arca_integration_fields, calculate_field_confidence, extract_document, extract_upload_text
 from infer import (
     assess_document_quality,
     build_display_description,
@@ -99,6 +99,30 @@ class ArcaParserRegressionTests(unittest.TestCase):
         self.assertEqual(result["field_confidence"]["total"], 1.0)
         self.assertEqual(result["field_confidence"]["description"], 1.0)
         self.assertNotIn("fecha_vencimiento_pago", result["field_confidence"])
+
+    def test_factura_c_confidence_does_not_flag_expected_empty_iva_or_items(self):
+        data = {
+            "tipo_comprobante": "Factura C",
+            "codigo_comprobante": 11,
+            "numero_factura": "00001-00000059",
+            "fecha_emision": "2021-04-30",
+            "fecha_vencimiento_cae": "2021-05-06",
+            "emisor": {"nombre": "MARI DALINA ADRIANA", "cuit": "27-26493367-1"},
+            "receptor": {"nombre": "CS TECH CONSULTING S.A.", "cuit": "30-71544453-0"},
+            "subtotal": 27000.0,
+            "iva_total": None,
+            "tributos_total": 0.0,
+            "total": 27000.0,
+            "cae": "71181484605002",
+            "items": [],
+            "descripcion": "Servicios de consultoria Abril 2021",
+        }
+
+        field_confidence = calculate_field_confidence(data)
+
+        self.assertNotIn("iva_total", field_confidence)
+        self.assertNotIn("items", field_confidence)
+        self.assertEqual(field_confidence["description"], 1.0)
 
     def test_forced_pdf_ocr_can_prefer_better_embedded_text(self):
         embedded_text = arca_text(
