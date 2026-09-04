@@ -77,6 +77,58 @@ class ArcaParserRegressionTests(unittest.TestCase):
         self.assertEqual(validate_extracted_document_json(parsed), [])
         self.assertNotIn("Factura A sin IVA discriminado.", assess_document_quality(parsed, text))
 
+    def test_factura_a_with_explicit_zero_iva_does_not_require_review(self):
+        text = arca_text(
+            "A",
+            1,
+            "27351860303",
+            "00002",
+            "00000016",
+            "71183527410761",
+            "21/05/2021",
+            "Honorarios Abr21",
+            67000.0,
+            "Alicuota IVA 0% IVA 0,00",
+        )
+
+        result = extract_document(text, filename="factura-a-iva-0.pdf")
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["requires_review"])
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["data"]["iva_total"], 0.0)
+        self.assertEqual(result["data"]["iva_porcentaje"], 0)
+
+    def test_document_code_text_overrides_mismatched_filename_code(self):
+        text = """Archivo: 05 Mayo - FG 27351860303_001_00002_00000016.pdf
+ORIGINAL
+GIANNI FLORENCIA SOLEDAD
+C
+FACTURA
+COD. 011
+Punto de Venta: 00002 Comp. Nro: 00000016
+Fecha de Emision: 01/05/2021
+CUIT: 27351860303
+Condicion frente al IVA: Responsable Monotributo
+CUIT: 30715444530
+Apellido y Nombre / Razon Social: CS TECH CONSULTING S.A.
+Codigo Producto / Servicio Cantidad Precio Unit. Subtotal
+01 Honorarios Abr21 1,00 67000,00 67000,00
+Subtotal: $ 67000,00
+Importe Total: $ 67000,00
+CAE Nro: 71183527410761
+Fecha de Vto. de CAE: 21/05/2021
+"""
+
+        result = extract_document(text, filename="05 Mayo - FG 27351860303_001_00002_00000016.pdf")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["tipo_comprobante"], "Factura C")
+        self.assertEqual(result["data"]["codigo_comprobante"], 11)
+        self.assertEqual(result["data"]["numero_factura_completo"], "27351860303_011_00002_00000016")
+        self.assertFalse(result["requires_review"])
+        self.assertEqual(result["warnings"], [])
+
     def test_api_returns_field_confidence_and_review_flag(self):
         text = arca_text(
             "B",

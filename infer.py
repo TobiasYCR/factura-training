@@ -523,14 +523,6 @@ def derive_iva_percentage(parsed):
 
 
 def extract_arca_document_code(text):
-    filename_code = first_match(
-        r"Archivo:.*?\b\d{10,11}_(\d{1,3})_\d{4,5}_\d{7,9}\.pdf",
-        text,
-        re.IGNORECASE | re.DOTALL,
-    )
-    if filename_code:
-        return int(filename_code)
-
     code_text = first_match(
         r"\bC(?:[ÓÓO]D|OD|ÓDIGO|ODIGO)\.?(?:\s*N[°ºo.]*)?\s*:?\s*0*(\d{1,3})\b",
         text,
@@ -542,6 +534,14 @@ def extract_arca_document_code(text):
     letter = extract_arca_document_letter(text)
     if letter:
         return ARCA_CODE_BY_LETTER[letter]
+
+    filename_code = first_match(
+        r"Archivo:.*?\b\d{10,11}_(\d{1,3})_\d{4,5}_\d{7,9}\.pdf",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if filename_code:
+        return int(filename_code)
     return None
 
 
@@ -4929,6 +4929,26 @@ def invoice_letter(parsed):
     return match.group(1).upper() if match else None
 
 
+def has_explicit_zero_iva(parsed, source_text=None):
+    if as_number(parsed.get("iva_total")) != 0.0:
+        return False
+
+    for item in parsed.get("iva") or []:
+        if not isinstance(item, dict):
+            continue
+        rate = rate_from_description(item.get("descripcion"))
+        if rate == 0:
+            return True
+
+    text = str(source_text or "")
+    if re.search(r"\bIVA\s*0(?:[,.]0+)?\s*%", text, re.IGNORECASE):
+        return True
+    return bool(
+        re.search(r"Al[ií]cuota\s+IVA", text, re.IGNORECASE)
+        and re.search(r"\b0(?:[,.]0+)?\s*%", text, re.IGNORECASE)
+    )
+
+
 def has_suspicious_short_description(description):
     text = re.sub(r"\s+", " ", str(description or "")).strip()
     if not text:
@@ -4991,7 +5011,7 @@ def assess_invoice_quality(parsed, source_text=None):
         warnings.append("Factura B con codigo de comprobante inesperado.")
     if letter in {"A", "C"} and as_number(parsed.get("total")) is None:
         warnings.append("Factura ARCA sin total numerico.")
-    if letter == "A" and as_number(parsed.get("iva_total")) in {None, 0.0}:
+    if letter == "A" and as_number(parsed.get("iva_total")) in {None, 0.0} and not has_explicit_zero_iva(parsed, source_text):
         warnings.append("Factura A sin IVA discriminado.")
 
     subtotal = as_number(parsed.get("subtotal"))
