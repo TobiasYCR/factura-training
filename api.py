@@ -34,6 +34,7 @@ from ocr import (
     get_ocr_status,
     ocr_image_bytes,
     ocr_pdf_bytes,
+    score_ocr_text,
 )
 
 MAX_UPLOAD_BYTES = int(os.environ.get("FACTURA_MAX_UPLOAD_MB", "25")) * 1024 * 1024
@@ -150,7 +151,6 @@ def calculate_field_confidence(data):
             "tipo_comprobante": "tipo_comprobante",
             "numero_factura": "numero_factura",
             "fecha_emision": "fecha_emision",
-            "fecha_vencimiento_pago": "fecha_vencimiento_pago",
             "fecha_vencimiento_cae": "fecha_vencimiento_cae",
             "emisor_nombre": "emisor.nombre",
             "emisor_cuit": "emisor.cuit",
@@ -164,6 +164,10 @@ def calculate_field_confidence(data):
             "description": "descripcion",
             "items": "items",
         }
+        if data.get("fecha_vencimiento_pago"):
+            paths["fecha_vencimiento_pago"] = "fecha_vencimiento_pago"
+        if data.get("fecha_vencimiento"):
+            paths["fecha_vencimiento"] = "fecha_vencimiento"
 
     return {name: score_field_value(get_nested_value(data, path)) for name, path in paths.items()}
 
@@ -275,6 +279,31 @@ def parse_int(value, default):
         return default
 
 
+def score_upload_text_candidate(text, filename):
+    parser_text = f"Archivo: {filename}\n{text}" if filename else text
+    parsed = parse_supported_document_ocr(parser_text)
+    if parsed is None:
+        return {
+            "ok": False,
+            "confidence": 0.0,
+            "errors": ["Sin parser"],
+            "warnings": [],
+            "ocr_score": round(score_ocr_text(text), 2),
+        }
+
+    errors = validate_extracted_document_json(parsed)
+    data = add_arca_integration_fields(parsed, parser_text)
+    warnings = assess_document_quality(data, parser_text)
+    confidence = calculate_confidence(data, errors, "parser", False, warnings)
+    return {
+        "ok": not errors,
+        "confidence": confidence,
+        "errors": errors,
+        "warnings": warnings,
+        "ocr_score": round(score_ocr_text(text), 2),
+    }
+
+
 def extract_embedded_pdf_text(pdf_bytes):
     errors = []
 
@@ -316,8 +345,45 @@ def extract_upload_text(
             text, meta = extract_embedded_pdf_text(file_bytes)
             if text and not looks_like_broken_embedded_text(text):
                 return text, meta
-        text, ocr_meta = ocr_pdf_bytes(file_bytes, lang=ocr_lang, dpi=ocr_dpi, multipass=ocr_multipass)
-        return text, {"method": "ocr", **ocr_meta}
+        embedded_text, embedded_meta = extract_embedded_pdf_text(file_bytes)
+        has_usable_embedded_text = embedded_text and not looks_like_broken_embedded_text(embedded_text)
+        try:
+            ocr_text, ocr_meta = ocr_pdf_bytes(file_bytes, lang=ocr_lang, dpi=ocr_dpi, multipass=ocr_multipass)
+        except OcrUnavailableError as error:
+            if has_usable_embedded_text:
+                return embedded_text, {
+                    **embedded_meta,
+                    "forced_ocr_requested": bool(force_ocr),
+                    "selected_text": "embedded_text",
+                    "ocr_error": str(error),
+                }
+            raise
+        if has_usable_embedded_text:
+            embedded_score = score_upload_text_candidate(embedded_text, filename)
+            ocr_score = score_upload_text_candidate(ocr_text, filename)
+            if embedded_score["ok"] and (
+                not ocr_score["ok"]
+                or embedded_score["confidence"] >= ocr_score["confidence"]
+                or embedded_score["ocr_score"] > ocr_score["ocr_score"] + 80
+            ):
+                return embedded_text, {
+                    **embedded_meta,
+                    "forced_ocr_requested": bool(force_ocr),
+                    "selected_text": "embedded_text",
+                    "alternatives": {
+                        "embedded_text": embedded_score,
+                        "ocr": ocr_score,
+                    },
+                }
+            ocr_meta = {
+                **ocr_meta,
+                "selected_text": "ocr",
+                "alternatives": {
+                    "embedded_text": embedded_score,
+                    "ocr": ocr_score,
+                },
+            }
+        return ocr_text, {"method": "ocr", **ocr_meta}
 
     if suffix in IMAGE_EXTENSIONS:
         text, ocr_meta = ocr_image_bytes(file_bytes, lang=ocr_lang, multipass=ocr_multipass)

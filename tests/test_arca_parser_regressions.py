@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from api import add_arca_integration_fields, extract_document
+from api import add_arca_integration_fields, extract_document, extract_upload_text
 from infer import (
     assess_document_quality,
     build_display_description,
@@ -8,6 +9,7 @@ from infer import (
     parse_supported_document_ocr,
     validate_extracted_document_json,
 )
+from ocr import OcrUnavailableError
 
 
 def arca_text(letter, code, cuit, point_of_sale, receipt_number, cae, due_date, item, total, iva_line=""):
@@ -96,6 +98,47 @@ class ArcaParserRegressionTests(unittest.TestCase):
         self.assertEqual(result["field_confidence"]["numero_factura"], 1.0)
         self.assertEqual(result["field_confidence"]["total"], 1.0)
         self.assertEqual(result["field_confidence"]["description"], 1.0)
+        self.assertNotIn("fecha_vencimiento_pago", result["field_confidence"])
+
+    def test_forced_pdf_ocr_can_prefer_better_embedded_text(self):
+        embedded_text = arca_text(
+            "B",
+            6,
+            "30715999999",
+            "00003",
+            "00000042",
+            "71111111111111",
+            "30/04/2021",
+            "Servicio mensual de prueba",
+            1210.0,
+        )
+        with patch("api.ocr_pdf_bytes", return_value=("ruido sin datos fiscales", {"engine": "tesseract"})):
+            with patch("api.extract_embedded_pdf_text", return_value=(embedded_text, {"method": "embedded_text"})):
+                text, meta = extract_upload_text(b"pdf", "factura-b.pdf", force_ocr=True)
+
+        self.assertEqual(text, embedded_text)
+        self.assertEqual(meta["selected_text"], "embedded_text")
+        self.assertTrue(meta["forced_ocr_requested"])
+
+    def test_forced_pdf_ocr_falls_back_to_embedded_text_when_ocr_unavailable(self):
+        embedded_text = arca_text(
+            "B",
+            6,
+            "30715999999",
+            "00003",
+            "00000042",
+            "71111111111111",
+            "30/04/2021",
+            "Servicio mensual de prueba",
+            1210.0,
+        )
+        with patch("api.ocr_pdf_bytes", side_effect=OcrUnavailableError("sin tesseract")):
+            with patch("api.extract_embedded_pdf_text", return_value=(embedded_text, {"method": "embedded_text"})):
+                text, meta = extract_upload_text(b"pdf", "factura-b.pdf", force_ocr=True)
+
+        self.assertEqual(text, embedded_text)
+        self.assertEqual(meta["selected_text"], "embedded_text")
+        self.assertEqual(meta["ocr_error"], "sin tesseract")
 
     def test_factura_b_labeled_item_rows_build_description(self):
         text = """FACTURA B
