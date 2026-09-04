@@ -3742,6 +3742,136 @@ def parse_trentadue_respawn_arca_ocr(text):
     return normalize_invoice_json(parsed)
 
 
+def parse_notebooks_cordoba_arca_ocr(text):
+    upper_text = str(text or "").upper()
+    if "NOTEBOOKS CORDOBA" not in upper_text and "CORDOBANOTEBOOKS" not in upper_text:
+        return None
+    if "DESCRIPCION CANT" not in upper_text and "DESCRIPCIÓN CANT" not in upper_text:
+        return None
+
+    source = deduplicate_document_copies(text)
+    filename_match = re.search(r"Archivo:.*?\b(\d{11})_(\d{3})_(\d{4,5})_(\d{7,9})\.pdf", source, re.IGNORECASE)
+    numbers = re.search(r"FACTURA\s+N[º°]?\s*(\d{4,5})-(\d{7,9})", source, re.IGNORECASE)
+    if not (numbers or filename_match):
+        return None
+
+    table_match = re.search(
+        r"Descripci\S*n\s+Cant\.\s+Precio\s+Uni\.\s+Sub\s+Total\s+%?\s*IVA\s+Sub\s+Total\s+c/\s*IVA\s*(?P<body>.*?)(?=\n---PAGE---|\Z)",
+        source,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not table_match:
+        return None
+
+    items = []
+    pending_description = []
+    row_pattern = re.compile(
+        r"^(?P<quantity>\d+(?:[,.]\d+)?)\s+"
+        r"(?P<unit_price>[\d.,]+)\s+"
+        r"(?P<subtotal>[\d.,]+)\s+"
+        r"(?P<vat_rate>\d+(?:[,.]\d+)?)\s+"
+        r"(?P<gross>[\d.,]+)$",
+        re.IGNORECASE,
+    )
+    for raw_line in table_match.group("body").splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        match = row_pattern.match(line)
+        if not match:
+            if not re.match(r"^(?:Cantidad|Precio|Sub\s+Total|IVA)\b", line, re.IGNORECASE):
+                pending_description.append(line)
+            continue
+
+        description = clean_arca_description_candidate(" ".join(pending_description))
+        pending_description = []
+        amount = parse_money(match.group("subtotal"))
+        if description and amount is not None:
+            items.append(
+                {
+                    "descripcion": description,
+                    "cantidad": parse_quantity(match.group("quantity")),
+                    "precio_unitario": parse_money(match.group("unit_price")),
+                    "importe": amount,
+                }
+            )
+
+    if not items:
+        return None
+
+    subtotal = parse_money(first_match(r"(?:^|\n)SUBTOTAL:\s*\$?\s*([\d.,]+)", source, re.IGNORECASE))
+    iva_total = parse_money(first_match(r"(?:^|\n)MONTO\s+IVA:\s*\$?\s*([\d.,]+)", source, re.IGNORECASE) or 0)
+    total = parse_money(first_match(r"(?:^|\n)TOTAL:\s*\$?\s*([\d.,]+)", source, re.IGNORECASE))
+    issue_date = first_match(r"FECHA:\s*(\d{1,2}/\d{1,2}/\d{4})", source, re.IGNORECASE)
+    cae = extract_cae(source)
+    due_date = first_match(r"FECHA\s+VTO:\s*(\d{1,2}/\d{1,2}/\d{4})", source, re.IGNORECASE)
+    provider_cuit = (
+        first_match(r"RESPONSABLE\s+INSCRIPTO\s+CUIT:\s*(\d{11})", source, re.IGNORECASE)
+        or (filename_match.group(1) if filename_match else None)
+    )
+    receiver = re.search(
+        r"SE\S*OR/ES:\s*(?P<name>.+?)\s+IVA:\s*RESPONSABLE\s+INSCRIPTO\s+CUIT:\s*(?P<cuit>\d{11})",
+        source,
+        re.IGNORECASE,
+    )
+    if not (subtotal is not None and iva_total is not None and total is not None and issue_date and cae and due_date):
+        return None
+
+    point_of_sale = (numbers.group(1) if numbers else filename_match.group(3)).zfill(5)
+    receipt_number = (numbers.group(2) if numbers else filename_match.group(4)).zfill(8)
+    iva_rate = rate_from_description(first_match(r"%\s*IVA.*?\n.*?\s(\d+(?:[,.]\d+)?)\s+[\d.,]+\s*$", table_match.group("body"), re.IGNORECASE | re.DOTALL))
+    if iva_rate is None and subtotal:
+        iva_rate = round((iva_total / subtotal) * 100, 2)
+    iva = []
+    if iva_total:
+        iva.append(
+            {
+                "codigo": IVA_CODE_BY_RATE.get(iva_rate),
+                "descripcion": f"{iva_rate:g}%" if iva_rate is not None else None,
+                "base_imponible": subtotal,
+                "importe": iva_total,
+            }
+        )
+
+    parsed = {
+        "tipo_comprobante": "Factura A",
+        "codigo_comprobante": 1,
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_document_date(issue_date),
+        "emisor": {
+            "nombre": "NOTEBOOKS CORDOBA",
+            "cuit": provider_cuit,
+            "doc_tipo": 80 if provider_cuit else None,
+            "doc_nro": digits(provider_cuit),
+            "condicion_iva": "IVA Responsable Inscripto",
+        },
+        "receptor": {
+            "nombre": receiver.group("name").strip() if receiver else None,
+            "cuit": receiver.group("cuit") if receiver else None,
+            "doc_tipo": 80 if receiver else None,
+            "doc_nro": digits(receiver.group("cuit")) if receiver else None,
+            "condicion_iva": "IVA Responsable Inscripto" if receiver else None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_total,
+        "tributos_total": 0.0,
+        "impuestos": iva_total,
+        "total": total,
+        "cae": cae,
+        "fecha_vencimiento_cae": parse_document_date(due_date),
+        "iva": iva,
+        "tributos": [],
+        "items": items,
+    }
+    return normalize_invoice_json(parsed)
+
+
 def parse_telecom_fibertel_invoice_ocr(text):
     upper_text = str(text or "").upper()
     if not any(marker in upper_text for marker in ("FIBERTEL", "CABLEVISI", "TELECOM ARGENTINA")):
@@ -4608,6 +4738,7 @@ def parse_structured_arca_ocr(ocr_text):
         parse_despegar_arca_ocr,
         parse_lenovo_arca_ocr,
         parse_trentadue_respawn_arca_ocr,
+        parse_notebooks_cordoba_arca_ocr,
         parse_telecom_fibertel_invoice_ocr,
         parse_osde_debit_note_ocr,
         parse_osde_invoice_ocr,

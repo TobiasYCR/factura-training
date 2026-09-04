@@ -1290,6 +1290,43 @@ Importe Total: $ 1079169,52
         self.assertEqual(result["data"]["items"][2]["cantidad"], 4)
         self.assertIn("Apple Macbook i5 8gb 256ssd 13.3", result["data"]["descripcion"])
 
+    def test_notebooks_cordoba_invoice_extracts_item_and_cae_due_date(self):
+        text = """Archivo: 05 Mayo - MSI 30714947776_001_00003_00002845.pdf
+NOTEBOOKS CORDOBA
+FACTURA
+Nº 0003-00002845
+FECHA: 10/05/2021
+RESPONSABLE INSCRIPTO CUIT: 30714947776
+A
+Cod.
+001
+SEÑOR/ES: CS TECH CONSULTING S.A. IVA: RESPONSABLE INSCRIPTO CUIT: 30715444530
+FECHA VENCIMIENTO: 10/05/2021
+FECHA VTO: 20/05/2021
+CAE: 71196990344991
+SUBTOTAL: $ 112.216,29
+MONTO IVA: $ 11.782,71
+TOTAL: $ 123.999,00
+Descripcion Cant. Precio Uni. Sub Total % IVA Sub Total c/
+IVA
+MODERN15455-SRL - MSI MODERN A10M-455 ULTRA THIN CORE I5-10210U
+1.6GHZ 512GB SSD 8GB 15.6" (1920X1080) BT WIN10 WEBCAM BLACK
+BACKLIT KEYBOARD. - CARRITO 39198752
+1,00 112.216,29 112.216,29 10,50 123.999,00
+"""
+
+        result = extract_document(text, filename="05 Mayo - MSI 30714947776_001_00003_00002845.pdf")
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["requires_review"])
+        self.assertEqual(result["warnings"], [])
+        self.assertEqual(result["data"]["emisor"]["nombre"], "NOTEBOOKS CORDOBA")
+        self.assertEqual(result["data"]["fecha_vencimiento_cae"], "2021-05-20")
+        self.assertEqual(result["data"]["iva_total"], 11782.71)
+        self.assertEqual(result["data"]["total"], 123999.0)
+        self.assertEqual(len(result["data"]["items"]), 1)
+        self.assertIn("MSI MODERN A10M-455", result["data"]["descripcion"])
+
     def test_quality_warnings_detect_inconsistent_totals(self):
         text = arca_text(
             "A",
