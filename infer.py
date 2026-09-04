@@ -3608,6 +3608,140 @@ def parse_lenovo_arca_ocr(text):
     return normalize_invoice_json(parsed)
 
 
+def parse_trentadue_respawn_arca_ocr(text):
+    upper_text = str(text or "").upper()
+    if "TRENTADUE" not in upper_text and "RESPAWN" not in upper_text:
+        return None
+    if "CODIGO PRODUCTO" not in upper_text and "PRODUCTO / SERVICIO" not in upper_text:
+        return None
+
+    source = deduplicate_document_copies(text)
+    filename_match = re.search(r"Archivo:.*?\b(\d{11})_(\d{3})_(\d{4,5})_(\d{7,9})\.pdf", source, re.IGNORECASE)
+    numbers = re.search(
+        r"Punto\s+de\s+Venta:\s*(?:Comp\.?\s*Nro:?)?\s*(\d{4,5})\s+(\d{7,9})",
+        source,
+        re.IGNORECASE,
+    )
+    if not (numbers or filename_match):
+        return None
+
+    table_match = re.search(
+        r"C\S*digo\s+Producto\s*/\s*Servicio.*?Subtotal\s+c/IVA\s*(?P<body>.*?)(?=\n\s*Descripci\S*n\s+Importe|\n\s*Otros\s+Tributos|\n\s*CAE)",
+        source,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not table_match:
+        return None
+
+    items = []
+    pending_description = []
+    seen = set()
+    row_pattern = re.compile(
+        r"^(?:(?P<description>.+?)\s+)?"
+        r"(?P<quantity>\d+(?:[,.]\d+)?)\s+unidades\s+"
+        r"(?P<unit_price>[\d.,]+)\s+"
+        r"(?P<discount>[\d.,]+)\s+"
+        r"(?P<subtotal>[\d.,]+)\s+"
+        r"(?P<vat_rate>\d+(?:[,.]\d+)?)%\s+"
+        r"(?P<gross>[\d.,]+)$",
+        re.IGNORECASE,
+    )
+    for raw_line in table_match.group("body").splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line:
+            continue
+        match = row_pattern.match(line)
+        if not match:
+            if not re.match(r"^(?:Cantidad|U\.?\s*medida|Precio|Subtotal|Alicuota|IVA)\b", line, re.IGNORECASE):
+                pending_description.append(line)
+            continue
+
+        description_parts = pending_description
+        if match.group("description"):
+            description_parts = description_parts + [match.group("description")]
+        pending_description = []
+        description = clean_arca_description_candidate(" ".join(description_parts))
+        amount = parse_money(match.group("subtotal"))
+        if not description or amount is None:
+            continue
+        item_key = (description.lower(), match.group("quantity"), amount)
+        if item_key in seen:
+            continue
+        seen.add(item_key)
+        items.append(
+            {
+                "descripcion": description,
+                "cantidad": parse_quantity(match.group("quantity")),
+                "precio_unitario": parse_money(match.group("unit_price")),
+                "importe": amount,
+            }
+        )
+
+    if not items:
+        return None
+
+    subtotal = parse_money(first_match(r"Importe\s+Neto\s+Gravado:\s*\$?\s*([\d.,]+)", source, re.IGNORECASE))
+    if subtotal is None:
+        subtotal = round_money(sum(item["importe"] for item in items))
+    iva_105 = parse_money(first_match(r"IVA\s+10[,.]5%\s*:\s*\$?\s*([\d.,]+)", source, re.IGNORECASE) or 0)
+    total = parse_money(first_match(r"Importe\s+Total:\s*\$?\s*([\d.,]+)", source, re.IGNORECASE))
+    provider_cuit = filename_match.group(1) if filename_match else first_match(r"\b(30-?71515106-?1|30715151061)\b", source, re.IGNORECASE)
+    receiver_cuit = first_match(r"\b(30-?71544453-?0|30715444530)\b", source, re.IGNORECASE)
+    receiver_name = (
+        first_match(r"30715444530\s+([A-Z0-9 .]+?S\.?A\.?)\b", source, re.IGNORECASE)
+        or first_match(r"(CS\s+TECH\s+CONSULTING\s+S\.?A\.?)", source, re.IGNORECASE)
+    )
+    issue_date = first_match(r"\b(\d{2}/\d{2}/\d{4})\b", source)
+    cae = extract_cae(source)
+    due_date = extract_cae_expiration(source)
+    if not (subtotal is not None and total is not None and issue_date and cae and due_date):
+        return None
+
+    point_of_sale = (numbers.group(1) if numbers else filename_match.group(3)).zfill(5)
+    receipt_number = (numbers.group(2) if numbers else filename_match.group(4)).zfill(8)
+    iva = []
+    if iva_105:
+        iva.append({"codigo": 4, "descripcion": "10.5%", "base_imponible": subtotal, "importe": iva_105})
+
+    parsed = {
+        "tipo_comprobante": "Factura A",
+        "codigo_comprobante": 1,
+        "punto_venta": point_of_sale,
+        "numero_comprobante": receipt_number,
+        "numero_factura": f"{point_of_sale}-{receipt_number}",
+        "fecha_emision": parse_document_date(issue_date),
+        "emisor": {
+            "nombre": "TRENTADUE S.A.",
+            "cuit": provider_cuit,
+            "doc_tipo": 80 if provider_cuit else None,
+            "doc_nro": digits(provider_cuit),
+            "condicion_iva": "IVA Responsable Inscripto",
+        },
+        "receptor": {
+            "nombre": receiver_name,
+            "cuit": receiver_cuit,
+            "doc_tipo": 80 if receiver_cuit else None,
+            "doc_nro": digits(receiver_cuit),
+            "condicion_iva": "IVA Responsable Inscripto" if receiver_cuit else None,
+        },
+        "moneda": "PES",
+        "tipo_cambio": 1,
+        "subtotal": subtotal,
+        "importe_no_gravado": 0.0,
+        "importe_exento": 0.0,
+        "iva_total": iva_105,
+        "tributos_total": 0.0,
+        "impuestos": iva_105,
+        "total": total,
+        "cae": cae,
+        "fecha_vencimiento_cae": parse_document_date(due_date),
+        "iva": iva,
+        "tributos": [],
+        "items": items,
+    }
+    return normalize_invoice_json(parsed)
+
+
 def parse_telecom_fibertel_invoice_ocr(text):
     upper_text = str(text or "").upper()
     if not any(marker in upper_text for marker in ("FIBERTEL", "CABLEVISI", "TELECOM ARGENTINA")):
@@ -4473,6 +4607,7 @@ def parse_structured_arca_ocr(ocr_text):
         parse_mipyme_fce_ocr,
         parse_despegar_arca_ocr,
         parse_lenovo_arca_ocr,
+        parse_trentadue_respawn_arca_ocr,
         parse_telecom_fibertel_invoice_ocr,
         parse_osde_debit_note_ocr,
         parse_osde_invoice_ocr,

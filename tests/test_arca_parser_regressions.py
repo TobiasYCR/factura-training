@@ -1243,6 +1243,53 @@ T.E.: 5293-7800 AREA COBRANZAS FECHA VTO: 31/05/2021
         self.assertEqual(result["data"]["fecha_vencimiento_cae"], "2021-05-31")
         self.assertEqual(result["data"]["descripcion"], "Yoga Smart Tab - Iron G")
 
+    def test_trentadue_mac_invoice_extracts_multiple_items(self):
+        text = """Archivo: 05 Mayo - Mac 30715151061_001_00001_00000056.pdf
+Fecha de Emisi�n:
+ORIGINAL
+TRENTADUE S.A.
+31/05/2021
+30715151061
+30715444530 CS TECH CONSULTING S.A.
+Punto de Venta: Comp. Nro:00001 00000056
+RESPAWN
+FACTURAACOD. 01
+C�digo Producto / Servicio Cantidad U. medida Precio Unit. % Bonif Subtotal Alicuota
+IVA Subtotal c/IVA
+Apple iPad 8th Generation 10.2" Wi-Fi 128GB
+SPACE GREY NEWEST MODEL. 1 Year
+Warranty, ETA: 7 Days, Retail Box, New Factory
+Sealed
+1,00 unidades 57280,00 0,00 57280,00 10,5% 63294,40
+Apple Macbook i3 8gb 256ssd 13.3" 3,00 unidades 114560,00 0,00 343680,00 10,5% 379766,40
+Apple Macbook i3 8gb 256ssd 13.3" - REF 4,00 unidades 106326,00 0,00 425304,00 10,5% 469960,92
+Apple Macbook i5 8gb 256ssd 13.3" 1,00 unidades 150360,00 0,00 150360,00 10,5% 166147,80
+Descripci�n ImporteDetalle Al�c. %
+Otros Tributos
+CAE N�:
+Fecha de Vto. de CAE:
+10/06/2021
+71221112841237
+Importe Otros Tributos: $ 0,00
+Importe Neto Gravado: $ 976624,00
+IVA 10.5%: $ 102545,52
+Importe Total: $ 1079169,52
+"""
+
+        result = extract_document(text, filename="05 Mayo - Mac 30715151061_001_00001_00000056.pdf")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["data"]["emisor"]["nombre"], "TRENTADUE S.A.")
+        self.assertEqual(result["data"]["fecha_emision"], "2021-05-31")
+        self.assertEqual(result["data"]["subtotal"], 976624.0)
+        self.assertEqual(result["data"]["iva_total"], 102545.52)
+        self.assertEqual(result["data"]["total"], 1079169.52)
+        self.assertEqual(len(result["data"]["items"]), 4)
+        self.assertEqual(result["data"]["items"][0]["descripcion"], 'Apple iPad 8th Generation 10.2" Wi-Fi 128GB SPACE GREY NEWEST MODEL. 1 Year Warranty, ETA: 7 Days, Retail Box, New Factory Sealed')
+        self.assertEqual(result["data"]["items"][1]["descripcion"], 'Apple Macbook i3 8gb 256ssd 13.3"')
+        self.assertEqual(result["data"]["items"][2]["cantidad"], 4)
+        self.assertIn("Apple Macbook i5 8gb 256ssd 13.3", result["data"]["descripcion"])
+
     def test_quality_warnings_detect_inconsistent_totals(self):
         text = arca_text(
             "A",
